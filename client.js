@@ -149,11 +149,11 @@ window.__ModuleLoader__.load({
     const DOWN = "#00ff41";
     const FLAT = "#8b93a7";
     const YELLOW = "#ffcc00";
-    const STORAGE_KEY = "stocking.config.v1";
+    const STORAGE_KEY = "stocking.config.v1"; // 旧版全量分组配置（首启迁移目标价后不再作为分组源）
+    const TARGETS_KEY = "stocking.targets.v1"; // C 方案：目标价覆盖层 code→{buyPrice?,sellPrice?}，分组以 DB 为准
     const BASE = "/dsh-stock-watch";
     const DEFAULT_GROUPS = [
-      { name: "分组1", symbols: [{ code: "sh000001" }, { code: "sz399300" }, { code: "sh601899" }] },
-      { name: "分组2", symbols: [] },
+      { name: "全部关注", symbols: [] },
     ];
     const POS_KEY = "stocking.pos.v1";
     const SIZE_KEY = "stocking.size.v1";
@@ -807,36 +807,84 @@ window.__ModuleLoader__.load({
       const [renameEdit, setRenameEdit] = useState(null);
       const [renameTarget, setRenameTarget] = useState(null);
 
-      // 配置：localStorage 优先，首次从 Host /config 迁移 settings.json，兜底默认分组
+      // 目标价覆盖层（localStorage）：读 + 迁移（旧版 STORAGE_KEY 里的 buyPrice/sellPrice 一次性搬入）
+      const [targets, setTargets] = useState(() => {
+        const out = {};
+        try {
+          const raw = window.localStorage.getItem(TARGETS_KEY);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === "object") Object.assign(out, parsed);
+          }
+        } catch { /* ignore */ }
+        // 迁移旧版 stocking.config.v1 中的目标价（C 方案前分组存 localStorage，目标价挂在 symbol 上）
+        try {
+          const legacy = window.localStorage.getItem(STORAGE_KEY);
+          if (legacy) {
+            const parsed = JSON.parse(legacy);
+            if (parsed && Array.isArray(parsed.groups)) {
+              for (const g of parsed.groups) {
+                if (!g || !Array.isArray(g.symbols)) continue;
+                for (const s of g.symbols) {
+                  if (!s || typeof s.code !== "string") continue;
+                  const t = out[s.code] || {};
+                  if (s.buyPrice !== undefined) t.buyPrice = s.buyPrice;
+                  if (s.sellPrice !== undefined) t.sellPrice = s.sellPrice;
+                  if (t.buyPrice !== undefined || t.sellPrice !== undefined) out[s.code] = t;
+                }
+              }
+              window.localStorage.setItem(TARGETS_KEY, JSON.stringify(out));
+            }
+          }
+        } catch { /* ignore */ }
+        return out;
+      });
+
+      // 目标价变化 → 写覆盖层（不再写回全量分组）
       useEffect(() => {
-        let alive = true;
-        (async () => {
-          let cfg = null;
-          try {
-            const raw = window.localStorage.getItem(STORAGE_KEY);
-            if (raw) cfg = JSON.parse(raw);
-          } catch { /* ignore */ }
-          if (!cfg || !Array.isArray(cfg.groups) || cfg.groups.length === 0) {
-            try {
-              const res = await api("/config");
-              if (alive && res && Array.isArray(res.groups) && res.groups.length > 0) cfg = { groups: res.groups };
-            } catch { /* ignore */ }
+        try {
+          window.localStorage.setItem(TARGETS_KEY, JSON.stringify(targets));
+        } catch { /* ignore */ }
+      }, [targets]);
+
+      // 配置源状态（C 方案）：DB 为准 + 目标价覆盖层合并。localStorage 分组不再作为源。
+      // 每次拉 /config 都重新同步（DB 增删关注 / 改分组后药丸自动跟随）。
+      const [cfgSource, setCfgSource] = useState("db");
+      const targetsRef = useRef(targets);
+      useEffect(() => { targetsRef.current = targets; }, [targets]);
+      const refreshCfg = useCallback(async () => {
+        try {
+          const res = await api("/config");
+          if (!res || !Array.isArray(res.groups) || res.groups.length === 0) {
+            // DB 空池：用空「全部关注」，不显示旧配置/默认分组
+            setGroupsCfg([]);
+            setCfgSource("db");
+            return;
           }
-          if (!cfg || !Array.isArray(cfg.groups) || cfg.groups.length === 0) {
-            cfg = { groups: DEFAULT_GROUPS };
-          }
-          if (alive) setGroupsCfg(cfg.groups);
-        })();
-        return () => { alive = false; };
+          const merged = res.groups.map((g) => ({
+            ...g,
+            symbols: g.symbols.map((s) => {
+              const t = targetsRef.current[s.code];
+              if (!t) return s;
+              const copy = { ...s };
+              if (t.buyPrice !== undefined) copy.buyPrice = t.buyPrice;
+              if (t.sellPrice !== undefined) copy.sellPrice = t.sellPrice;
+              return copy;
+            }),
+          }));
+          setGroupsCfg(merged);
+          setCfgSource(res.dbDown ? "file" : "db");
+        } catch {
+          // host 不可用：保留现有 groupsCfg（不破坏当前视图）
+        }
       }, []);
 
-      // 配置变化 → 写回 localStorage
+      // 挂载 + 定时（60s）轮询 DB 配置
       useEffect(() => {
-        if (!groupsCfg) return;
-        try {
-          window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ groups: groupsCfg, updatedAt: Date.now() }));
-        } catch { /* ignore */ }
-      }, [groupsCfg]);
+        refreshCfg();
+        const id = setInterval(refreshCfg, 60000);
+        return () => clearInterval(id);
+      }, [refreshCfg]);
 
       const load = useCallback(async (includeMinutes) => {
         if (!groupsCfg || groupsCfg.length === 0) return;
@@ -943,26 +991,31 @@ window.__ModuleLoader__.load({
         await sendAnalysis("分析" + name + "（" + view.code + "）", "投资研究报告");
       }, [view, data, sendAnalysis]);
 
-      // 目标价不可变更新 + 本地行同步（写入 localStorage 由持久化 effect 完成）
+      // 目标价不可变更新：写入覆盖层 targets（持久化）+ 本地行/分组同步
+      // （分组本身以 DB 为准，这里只合并目标价，下次 refreshCfg 会按 code 重新合并）
       const applyTarget = useCallback((code, type, price) => {
         const key = type === "buy" ? "buyPrice" : "sellPrice";
+        setTargets((prev) => {
+          const t = { ...(prev[code] || {}) };
+          if (price === undefined) delete t[key];
+          else t[key] = price;
+          const out = { ...prev, [code]: t };
+          if (t.buyPrice === undefined && t.sellPrice === undefined) delete out[code];
+          return out;
+        });
+        // 本地立即生效（不等 60s 轮询）：直接更新 groupsCfg 与 data
         setGroupsCfg((prev) => {
           if (!prev) return prev;
-          return prev.map((g, gi) => {
-            if (gi !== groupIndex) return g;
-            const existing = g.symbols.find((s) => s.code === code);
-            if (!existing && price === undefined) return g;
-            const symbols = existing
-              ? g.symbols.map((s) => {
-                  if (s.code !== code) return s;
-                  const copy = { ...s };
-                  if (price === undefined) delete copy[key];
-                  else copy[key] = price;
-                  return copy;
-                })
-              : [...g.symbols, { code, [key]: price }];
-            return { ...g, symbols };
-          });
+          return prev.map((g) => ({
+            ...g,
+            symbols: g.symbols.map((s) => {
+              if (s.code !== code) return s;
+              const copy = { ...s };
+              if (price === undefined) delete copy[key];
+              else copy[key] = price;
+              return copy;
+            }),
+          }));
         });
         setData((d) => {
           if (!d || !Array.isArray(d.rows)) return d;
@@ -978,7 +1031,7 @@ window.__ModuleLoader__.load({
             }),
           };
         });
-      }, [groupIndex]);
+      }, []);
 
       const commitTargetEdit = useCallback((type) => {
         if (!targetEdit || targetEdit.type !== type || !view) return;
@@ -1319,69 +1372,73 @@ window.__ModuleLoader__.load({
         return () => clearTimeout(timer);
       }, [showAdd, stockQuery]);
 
-      // 添加股票到当前分组（当前分组重复 → 提示；其他分组重复 → 阻止；均不写入）
-      const addStock = useCallback((code, name) => {
-        const cur = (groupsCfg && groupsCfg[groupIndex]) || null;
-        const inCurrent = cur ? cur.symbols.some((s) => s.code === code) : false;
-        if (inCurrent) { flash("该股票已添加", "#888888"); return; }
+      // C 方案：添加股票 = 直写 DB 关注池（经 host 代理 /watchlist），成功后刷新配置。
+      // 分组归属由面板（DB bucket）管理，药丸为只读镜像，不再本地新增 symbol。
+      const addStock = useCallback(async (code, name) => {
         const exists = (groupsCfg || []).some((g) => g.symbols.some((s) => s.code === code));
-        if (exists) { flash("已在其他分组：" + name, "#888888"); return; }
-        setGroupsCfg((prev) => (prev || []).map((g, gi) =>
-          gi === groupIndex ? { ...g, symbols: [...g.symbols, { code }] } : g));
-        const gname = (groupsCfg && groupsCfg[groupIndex]) ? groupsCfg[groupIndex].name : "";
-        flash("✔ 已添加 " + name + (gname ? " 到「" + gname + "」" : ""));
-        setStockQuery("");
-        setStockResults(null);
-        setShowAdd(null); // 添加完成 → 回到股票列表
-      }, [groupsCfg, groupIndex, flash]);
+        if (exists) { flash("已在关注池：" + name, "#888888"); return; }
+        try {
+          const res = await fetch(BASE + "/watchlist", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ action: "add", code, name: name || "" }),
+          });
+          const json = await res.json().catch(() => ({}));
+          if (!res.ok || json.ok !== true) {
+            flash("添加失败：" + (json.error || "未知错误"), "#ff5555");
+            return;
+          }
+          flash("✔ 已添加 " + name + "（已写入关注池）");
+          setStockQuery("");
+          setStockResults(null);
+          setShowAdd(null); // 添加完成 → 回到股票列表
+          await refreshCfg(); // 立即同步 DB（不等 60s 轮询）
+        } catch {
+          flash("添加失败：本地面板服务不可用", "#ff5555");
+        }
+      }, [groupsCfg, refreshCfg, flash]);
 
-      // 添加分组（空名拦截，创建后切到新分组）
+      // C 方案：分组由面板（DB bucket）管理，药丸是镜像视图 —— 本地建组/改名/删组改为提示
       const addGroup = useCallback(() => {
-        const name = groupName.trim();
-        if (!name) { flash("分组名不能为空", "#ff5555"); return; }
-        const newIndex = (groupsCfg || []).length;
-        setGroupsCfg((prev) => [...(prev || []), { name, symbols: [] }]);
-        setGroupIndex(newIndex);
+        flash("分组请到面板「⚙️ 管理」中管理（药丸为 DB 镜像）", "#888888");
         setShowAdd(null);
-        flash("✔ 已创建分组「" + name + "」");
-      }, [groupName, groupsCfg, flash]);
+      }, [flash]);
 
-      // 重命名分组（renameTarget 指定哪个分组）
+      // 重命名分组（C 方案：禁用本地改名，指向面板管理）
       const commitRename = useCallback(() => {
-        if (renameTarget === null) return;
-        const name = (renameEdit || "").trim();
-        if (!name) { flash("分组名不能为空", "#ff5555"); return; }
-        setGroupsCfg((prev) => (prev || []).map((g, gi) => (gi === renameTarget ? { ...g, name } : g)));
+        flash("分组请到面板「⚙️ 管理」中管理（药丸为 DB 镜像）", "#888888");
         setRenameEdit(null);
         setRenameTarget(null);
-        flash("✔ 已重命名为「" + name + "」");
-      }, [renameEdit, renameTarget, flash]);
+      }, [flash]);
 
-      // 从当前分组删除股票（同步移除列表行）
-      const removeStock = useCallback((code, name) => {
-        setGroupsCfg((prev) => (prev || []).map((g, gi) =>
-          gi === groupIndex ? { ...g, symbols: g.symbols.filter((s) => s.code !== code) } : g));
-        setData((d) => (d && Array.isArray(d.rows)
-          ? { ...d, rows: d.rows.filter((r) => r.code !== code) }
-          : d));
-        flash("已删除 " + name, "#888888");
-      }, [groupIndex, flash]);
+      // C 方案：删除股票 = 从 DB 关注池移除（经 host 代理），成功后刷新配置
+      const removeStock = useCallback(async (code, name) => {
+        try {
+          const res = await fetch(BASE + "/watchlist", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ action: "remove", code }),
+          });
+          const json = await res.json().catch(() => ({}));
+          if (!res.ok || json.ok !== true) {
+            flash("删除失败：" + (json.error || "未知错误"), "#ff5555");
+            return;
+          }
+          setData((d) => (d && Array.isArray(d.rows)
+            ? { ...d, rows: d.rows.filter((r) => r.code !== code) }
+            : d));
+          flash("已从关注池删除 " + name, "#888888");
+          await refreshCfg(); // 立即同步 DB（不等 60s 轮询）
+        } catch {
+          flash("删除失败：本地面板服务不可用", "#ff5555");
+        }
+      }, [refreshCfg, flash]);
 
-      // 删除分组（确认提示；至少保留一个分组；删除后修正当前分组下标）
+      // 删除分组（C 方案：禁用本地删组，指向面板管理）
       const deleteGroup = useCallback((idx) => {
         const g = groupsCfg && groupsCfg[idx];
         if (!g) return;
-        if ((groupsCfg || []).length <= 1) { flash("至少保留一个分组", "#ff5555"); return; }
-        if (!window.confirm("确定删除分组「" + g.name + "」吗？其包含 " + g.symbols.length + " 只股票")) return;
-        setGroupsCfg((prev) => (prev || []).filter((_, gi) => gi !== idx));
-        setGroupIndex((cur) => {
-          if (idx < cur) return cur - 1;
-          if (idx === cur) return 0;
-          return cur;
-        });
-        setView(null);
-        setShowAdd(null);
-        flash("已删除分组「" + g.name + "」", "#888888");
+        flash("分组请到面板「⚙️ 管理」中管理（药丸为 DB 镜像）", "#888888");
       }, [groupsCfg, flash]);
 
       // 按住胶囊/面板头部拖动（按钮/输入框上不触发）
@@ -1685,10 +1742,10 @@ window.__ModuleLoader__.load({
         react.createElement("span", { className: "sk-foot-left", title: data && data.diag && data.diag.firstError ? data.diag.firstError : "" },
           data && data.live ? "腾讯行情" : (error ? "行情获取失败" : (data ? (data.diag && data.diag.firstError ? "行情失败：" + data.diag.firstError : "无实时数据") : "—"))),
         react.createElement("span", { className: "sk-foot-mid" }, data ? "更新 " + new Date(data.updatedAt).toLocaleTimeString("zh-CN", { hour12: false }) : ""),
-        react.createElement("span", { className: "sk-foot-right", title: data && data.config ? (data.config.path || "") : "" },
-          data && data.config && data.config.source === "local"
-            ? "配置：localStorage"
-            : (data && data.config && data.config.source === "file" ? "~/.stocking/settings.json" : "默认分组")));
+        react.createElement("span", { className: "sk-foot-right", title: "关注池来源：stock-panel DB（本地 8888）" },
+          cfgSource === "db"
+            ? "关注池：DB"
+            : (cfgSource === "file" ? "关注池：DB（降级 settings.json）" : "关注池：本地缓存")));
 
       // 添加面板（菜单 / 股票搜索 / 分组创建）
       const addPanel = showAdd ? react.createElement("div", { className: "sk-add-mask" },

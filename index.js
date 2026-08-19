@@ -16,6 +16,30 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, writeFileSync } from 
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
+/**
+ * C 方案：DB 单一真理源（stock-panel 本地 API）
+ *
+ * - 关注池成员与分组以 http://127.0.0.1:8888/api/watchlist 为准（stocks.active=1）。
+ * - /config 优先返回 DB 分组；8888 不可用或关注池为空时降级 ~/.stocking/settings.json（旧行为）。
+ * - 药丸内「添加/删除股票」经 /dsh-stock-watch/watchlist 代理直写 DB（严格单一来源）。
+ * - 分组（bucket）的增删改名锁定在面板侧，药丸为只读镜像视图。
+ * - 目标价（buyPrice/sellPrice）是盯盘私货，留在浏览器 localStorage 覆盖层，合并时按 code 保留。
+ */
+const DB_API_TIMEOUT = 2000;
+let dbGroupsCache = null;
+let dbGroupsCacheAt = 0;
+
+/** DB API 基址（惰性读取，便于测试/环境覆盖） */
+function dbApiBase() {
+  return process.env.DSH_STOCK_WATCH_DB_API || "http://127.0.0.1:8888";
+}
+
+/** DB 分组缓存 TTL（默认 5s，测试可置 0 关闭缓存） */
+function dbCacheTtl() {
+  const v = parseInt(process.env.DSH_STOCK_WATCH_DB_CACHE_TTL || "5000", 10);
+  return Number.isFinite(v) && v >= 0 ? v : 5000;
+}
+
 const name = "dsh-stock-watch";
 /** Required services: webServer（HTTP 路由）。 */
 const inject = ["webServer"];
@@ -174,7 +198,89 @@ function normalizeClientGroups(raw) {
   return out.length > 0 ? out : null;
 }
 
+/** 去掉市场前缀（sh600000 → 600000），用于回写 DB */
+function stripApiCode(code) {
+  const s = String(code || "");
+  return s.replace(/^(sh|sz|bj)/i, "");
+}
+
+/** 6 位数字 → 带市场前缀（供腾讯接口/药丸内部用） */
+function ensureApiCode(code) {
+  const s = stripApiCode(code);
+  if (/^\d{6}$/.test(s)) return normalizeApiCode(s);
+  return s;
+}
+
+/** 从本地 stock-panel API 拉关注池（DB stocks.active=1），失败/超时返回 null */
+async function fetchDbWatchlist() {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), DB_API_TIMEOUT);
+  try {
+    const res = await fetch(`${dbApiBase()}/api/watchlist`, { signal: ctrl.signal });
+    if (!res.ok) return null;
+    const json = await res.json();
+    return json && Array.isArray(json.stocks) ? json.stocks : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * DB 关注池行 → stock-watch 分组数组。
+ * 分组策略（C 方案 · 严格单一来源）：
+ *   - 成员：只保留 active=1 的关注池（服务端已过滤），按 code 去重。
+ *   - 分组 tab：优先用 DB 的 bucket（互斥单分组）生成 tab；
+ *     无 bucket 的股票进「全部关注」兜底 tab；DB groups（多标签）不映射为 tab（药丸是镜像视图）。
+ *   - 代码统一转带市场前缀；名称从 DB 取（腾讯行情名称只是展示覆盖）。
+ */
+function dbWatchlistToGroups(stocks) {
+  const groups = [];
+  const byBucket = new Map();
+  const seen = new Set();
+  for (const s of stocks) {
+    const rawCode = String(s.code || "").trim();
+    if (!rawCode) continue;
+    const code = ensureApiCode(rawCode);
+    if (seen.has(code)) continue;
+    seen.add(code);
+    const sym = { code };
+    if (s.name && String(s.name).trim()) sym.name = String(s.name).trim();
+    const bucket = (s.bucket || "").trim();
+    if (!byBucket.has(bucket)) byBucket.set(bucket, []);
+    byBucket.get(bucket).push(sym);
+  }
+  const bucketNames = [...byBucket.keys()];
+  if (bucketNames.length === 0 || (bucketNames.length === 1 && bucketNames[0] === "")) {
+    // 无 bucket：单「全部关注」tab
+    groups.push({ name: "全部关注", symbols: byBucket.get("") || [] });
+  } else {
+    for (const [bucket, symbols] of byBucket) {
+      groups.push({ name: bucket || "未分组", symbols });
+    }
+  }
+  return groups.filter((g) => g.symbols.length > 0 || g.name === "全部关注");
+}
+
+/** 带 5s TTL 缓存的 DB 分组读取（/config 与 /quotes 共用） */
+async function loadDbGroups() {
+  const now = Date.now();
+  if (dbGroupsCache && now - dbGroupsCacheAt < dbCacheTtl()) return dbGroupsCache;
+  const stocks = await fetchDbWatchlist();
+  if (!stocks) return null;
+  dbGroupsCache = dbWatchlistToGroups(stocks);
+  dbGroupsCacheAt = now;
+  return dbGroupsCache;
+}
+
 async function loadGroups() {
+  // 优先 DB：即使关注池为空也以 DB 为准（避免显示旧配置/默认分组的误导）
+  const dbGroups = await loadDbGroups();
+  if (dbGroups !== null) {
+    return { groups: dbGroups, source: "db", path: dbApiBase(), dbDown: false };
+  }
+  // DB 不可用（8888 没起 / 超时）→ 降级 ~/.stocking/settings.json（旧行为）
   const path = join(homedir(), ".stocking", "settings.json");
   try {
     const text = await readFile(path, "utf8");
@@ -204,11 +310,11 @@ async function loadGroups() {
       }
       groups.push(group);
     }
-    if (groups.length > 0) return { groups, source: "file", path };
+    if (groups.length > 0) return { groups, source: "file", path, dbDown: true };
   } catch {
     /* 读取/解析失败 → 兜底默认分组 */
   }
-  return { groups: DEFAULT_GROUPS, source: "default", path: null };
+  return { groups: DEFAULT_GROUPS, source: "default", path: null, dbDown: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -405,6 +511,21 @@ function queryOf(req) {
   return new URL(req.url ?? "/", "http://x").searchParams;
 }
 
+/** 读取 POST JSON body（代理药丸增删票到本地 DB API 用） */
+function readBody(req) {
+  return new Promise((resolve) => {
+    let body = "";
+    req.on("data", (c) => {
+      body += c;
+      if (body.length > 1e6) req.destroy();
+    });
+    req.on("end", () => {
+      try { resolve(JSON.parse(body || "{}")); } catch { resolve({}); }
+    });
+    req.on("error", () => resolve({}));
+  });
+}
+
 /**
  * 插件主体：注册 /dsh-stock-watch/* 路由。
  * @param {import("cordis").Context} ctx
@@ -422,7 +543,53 @@ function apply(ctx) {
 
   register("/dsh-stock-watch/config", async (_req, res) => {
     const loaded = await loadGroups();
-    sendJson(res, 200, { groups: loaded.groups, source: loaded.source, path: loaded.path });
+    sendJson(res, 200, {
+      groups: loaded.groups,
+      source: loaded.source,
+      path: loaded.path,
+      dbDown: !!loaded.dbDown,
+      dbBase: dbApiBase(),
+    });
+  });
+
+  // C 方案：药丸内增删关注直写本地 DB（严格单一来源，不回写 localStorage 分组）。
+  // body: { action: "add"|"remove", code: "sh600000"|"600000", name?: string }
+  register("/dsh-stock-watch/watchlist", async (req, res) => {
+    const body = await readBody(req);
+    const action = body.action;
+    const code = stripApiCode(body.code || "");
+    if (action !== "add" && action !== "remove") {
+      sendJson(res, 400, { ok: false, error: 'action 必须为 "add" 或 "remove"' });
+      return;
+    }
+    if (!/^\d{6}$/.test(code)) {
+      sendJson(res, 400, { ok: false, error: "无效股票代码: " + body.code });
+      return;
+    }
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), DB_API_TIMEOUT);
+    try {
+      const payload = action === "add"
+        ? { code, name: typeof body.name === "string" ? body.name : "" }
+        : { codes: [code] };
+      const r = await fetch(`${dbApiBase()}/api/watchlist/${action === "add" ? "add" : "remove"}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: ctrl.signal,
+      });
+      const json = await r.json().catch(() => ({}));
+      if (!r.ok || json.ok !== true) {
+        sendJson(res, 502, { ok: false, error: (json && json.error) || `本地 API 返回 ${r.status}` });
+        return;
+      }
+      dbGroupsCache = null; // 失效缓存，下次 /config 重新拉 DB
+      sendJson(res, 200, { ok: true, action, code });
+    } catch {
+      sendJson(res, 502, { ok: false, error: `本地 API 不可用（${dbApiBase()}，请先启动 stock-panel 面板服务）` });
+    } finally {
+      clearTimeout(timer);
+    }
   });
 
   // 添加股票搜索：按代码或名称匹配全 A 股池，返回带市场前缀的代码

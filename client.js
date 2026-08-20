@@ -25,6 +25,7 @@ window.__ModuleLoader__.load({
 .sk-pill:hover{border-color:var(--sk-cyan-border)}
 .sk-pill-title{font-weight:700;color:var(--sk-cyan);white-space:nowrap}
 .sk-pill-summary{display:inline-flex;gap:6px;font-weight:600}
+.sk-pill-signal{display:inline-flex;gap:5px;font-weight:700;margin-left:1px}
 .sk-pill-loading{color:var(--sk-muted)}
 /* 贴边吸附：胶囊变为屏幕边缘的半球，显示涨/跌家数（平边贴屏幕边缘，弧面朝内） */
 .sk-pill.sk-dock{box-sizing:border-box;width:52px;height:44px;flex-direction:column;gap:1px;padding:3px 4px;justify-content:center;text-align:center}
@@ -52,6 +53,7 @@ window.__ModuleLoader__.load({
 .sk-tabs::-webkit-scrollbar{display:none}
 .sk-tab{flex:none;padding:2px 9px;border-radius:999px;border:1px solid transparent;background:transparent;color:var(--sk-muted);cursor:pointer;font:inherit;white-space:nowrap}
 .sk-tab:hover{color:var(--sk-text)}
+.sk-tab-signal{font-weight:700}
 .sk-tab-active{background:var(--sk-cyan-soft);color:var(--sk-cyan);border-color:var(--sk-cyan-border)}
 .sk-tab-wrap{display:flex;align-items:center;gap:2px;flex:none}
 .sk-tab-del{background:transparent;border:none;color:var(--sk-muted);cursor:pointer;font-size:10px;font-weight:700;line-height:1;padding:0 2px;opacity:0;pointer-events:none}
@@ -66,11 +68,17 @@ window.__ModuleLoader__.load({
 .sk-countdown{color:var(--sk-muted);white-space:nowrap}
 .sk-icon{background:transparent;border:none;color:var(--sk-muted);cursor:pointer;font-size:13px;padding:2px 6px;border-radius:6px;font-family:inherit}
 .sk-icon:hover{color:var(--sk-text);background:var(--sk-hover)}
+.sk-sort-active{color:var(--sk-cyan);background:var(--sk-cyan-soft)}
 .sk-rows{overflow-y:auto;padding:4px 6px 8px;flex:1 1 auto}
 .sk-row{display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:8px;cursor:pointer}
 .sk-row:hover{background:var(--sk-hover)}
 .sk-name{display:flex;flex-direction:column;flex:1 1 auto;min-width:88px}
+.sk-name-row{display:flex;align-items:center;gap:4px;min-width:0}
 .sk-name-text{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sk-board-chip{flex:none;font-size:9px;font-weight:700;border:1px solid;border-radius:999px;padding:0 5px;line-height:1.5;white-space:nowrap}
+.sk-board-cy{color:#ff9f43;border-color:rgba(255,159,67,.55)}
+.sk-board-kc{color:#a78bfa;border-color:rgba(167,139,250,.55)}
+.sk-board-bj{color:#ff5555;border-color:rgba(255,85,85,.55)}
 .sk-code{color:var(--sk-muted);font-size:11px}
 .sk-spark{flex:none;display:block}
 .sk-price{width:60px;text-align:right;font-weight:700}
@@ -123,6 +131,8 @@ window.__ModuleLoader__.load({
 .sk-add-bar{display:flex;gap:8px;padding:6px 10px;border-top:1px solid var(--sk-border-soft)}
 .sk-add-bar-btn{flex:1;background:transparent;border:1px dashed var(--sk-border);color:var(--sk-dim);border-radius:8px;padding:6px;cursor:pointer;font:inherit}
 .sk-add-bar-btn:hover{border-color:var(--sk-cyan-border);color:var(--sk-text)}
+.sk-add-bar-primary{color:var(--sk-cyan);border:1px solid var(--sk-cyan-border);font-weight:600}
+.sk-add-bar-primary:hover{background:var(--sk-cyan-soft);color:var(--sk-cyan)}
 .sk-add-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
 .sk-add-title{font-weight:700;color:var(--sk-cyan)}
 .sk-add-menu{display:flex;flex-direction:column;gap:6px}
@@ -134,9 +144,13 @@ window.__ModuleLoader__.load({
 .sk-add-result-added .sk-add-result-name{color:var(--sk-muted)}
 .sk-add-result-badge{color:var(--sk-muted);font-size:10px;border:1px solid var(--sk-border);border-radius:999px;padding:0 5px;white-space:nowrap}
 .sk-add-results{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:2px}
-.sk-add-result{display:flex;gap:10px;align-items:center;background:transparent;border:none;color:var(--sk-text);border-radius:6px;padding:4px 8px;cursor:pointer;font:inherit;text-align:left}
+.sk-add-result{display:flex;gap:10px;align-items:center;background:transparent;border:none;color:var(--sk-text);border-radius:6px;padding:4px 8px;font:inherit;text-align:left}
 .sk-add-result:hover{background:var(--sk-hover)}
 .sk-add-result-code{color:var(--sk-muted);font-size:11px;width:52px}
+.sk-add-result-act{flex:none;background:var(--sk-cyan-soft);border:1px solid var(--sk-cyan-border);color:var(--sk-cyan);border-radius:4px;padding:1px 7px;cursor:pointer;font:inherit;font-size:10px;white-space:nowrap}
+.sk-add-result-act:hover{filter:brightness(1.15)}
+.sk-add-result-wo{background:transparent;border:1px solid var(--sk-border);color:var(--sk-dim)}
+.sk-add-result-wo:hover{border-color:var(--sk-cyan-border);color:var(--sk-text)}
 .sk-add-result-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sk-add-empty{color:var(--sk-muted);text-align:center;padding:14px 0;font-size:11px}
 .sk-add-group{display:flex;flex-direction:column;gap:8px}
@@ -151,6 +165,8 @@ window.__ModuleLoader__.load({
     const YELLOW = "#ffcc00";
     const STORAGE_KEY = "stocking.config.v1"; // 旧版全量分组配置（首启迁移目标价后不再作为分组源）
     const TARGETS_KEY = "stocking.targets.v1"; // C 方案：目标价覆盖层 code→{buyPrice?,sellPrice?}，分组以 DB 为准
+    const WATCHONLY_KEY = "stocking.watchonly.v1"; // 临时盯盘（不入库）：[{code,name}]，localStorage 私货层
+    const SORT_KEY = "stocking.sort.v1"; // 组内排序模式：default | chgDesc | chgAsc（localStorage 私货，与目标价同类）
     const BASE = "/dsh-stock-watch";
     const DEFAULT_GROUPS = [
       { name: "全部关注", symbols: [] },
@@ -195,6 +211,21 @@ window.__ModuleLoader__.load({
       const n = Number(p);
       if (!Number.isFinite(n)) return "--";
       return n >= 100 ? n.toFixed(2) : n.toFixed(3);
+    }
+
+    // 板块名（与 stock-panel 面板 signal_engine._boardName 同口径）：主板/创业板/科创板/北交所。
+    // 基于 6 位代码前缀判定，不依赖市场前缀（北交所可能被 normalizeApiCode 错标为 sh，故 strip 后再判）。
+    function boardOf(code) {
+      const c = String(code || "").replace(/^(sh|sz|bj)/i, "");
+      if (/^bj/i.test(String(code || "")) || /^[48]/.test(c) || /^920/.test(c)) return "北交所";
+      if (/^(300|301)/.test(c)) return "创业板";
+      if (/^(688|689)/.test(c)) return "科创板";
+      return "主板";
+    }
+    function boardChip(code) {
+      const b = boardOf(code);
+      if (b === "主板") return null; // 与面板一致：主板不标，非主板才挂 chip
+      return react.createElement("span", { className: "sk-board-chip sk-board-" + (b === "北交所" ? "bj" : b === "创业板" ? "cy" : "kc"), title: "板块：" + b }, b);
     }
 
     function triggerMeta(t) {
@@ -847,6 +878,42 @@ window.__ModuleLoader__.load({
         } catch { /* ignore */ }
       }, [targets]);
 
+      // 临时盯盘（不入库）：localStorage 私货层 [{code,name}]，与 DB 关注池合并显示。
+      // 加票时「临时盯盘」只写这里，不碰 DB；删除时按来源分流。
+      const [watchonly, setWatchonly] = useState(() => {
+        try {
+          const raw = window.localStorage.getItem(WATCHONLY_KEY);
+          if (raw) {
+            const p = JSON.parse(raw);
+            if (Array.isArray(p)) return p.filter((x) => x && typeof x.code === "string");
+          }
+        } catch { /* ignore */ }
+        return [];
+      });
+      useEffect(() => {
+        try {
+          window.localStorage.setItem(WATCHONLY_KEY, JSON.stringify(watchonly));
+        } catch { /* ignore */ }
+      }, [watchonly]);
+      const watchonlyRef = useRef(watchonly);
+      useEffect(() => { watchonlyRef.current = watchonly; }, [watchonly]);
+
+      // 组内排序模式（default=代码序 / chgDesc=涨跌幅降序 / chgAsc=涨跌幅升序）。
+      // 与目标价同类，属盯盘私货，存 localStorage。
+      const [sortMode, setSortMode] = useState(() => {
+        try {
+          const raw = window.localStorage.getItem(SORT_KEY);
+          if (raw === "chgDesc" || raw === "chgAsc" || raw === "default") return raw;
+        } catch { /* ignore */ }
+        return "default";
+      });
+      useEffect(() => {
+        try { window.localStorage.setItem(SORT_KEY, sortMode); } catch { /* ignore */ }
+      }, [sortMode]);
+
+      // 「⚡ 信号」聚合视图开关：true 时列表显示所有分组触发买入/卖出的股票
+      const [signalView, setSignalView] = useState(false);
+
       // 配置源状态（C 方案）：DB 为准 + 目标价覆盖层合并。localStorage 分组不再作为源。
       // 每次拉 /config 都重新同步（DB 增删关注 / 改分组后药丸自动跟随）。
       const [cfgSource, setCfgSource] = useState("db");
@@ -855,13 +922,8 @@ window.__ModuleLoader__.load({
       const refreshCfg = useCallback(async () => {
         try {
           const res = await api("/config");
-          if (!res || !Array.isArray(res.groups) || res.groups.length === 0) {
-            // DB 空池：用空「全部关注」，不显示旧配置/默认分组
-            setGroupsCfg([]);
-            setCfgSource("db");
-            return;
-          }
-          const merged = res.groups.map((g) => ({
+          const dbGroups = (res && Array.isArray(res.groups)) ? res.groups : [];
+          const merged = dbGroups.map((g) => ({
             ...g,
             symbols: g.symbols.map((s) => {
               const t = targetsRef.current[s.code];
@@ -872,8 +934,13 @@ window.__ModuleLoader__.load({
               return copy;
             }),
           }));
-          setGroupsCfg(merged);
-          setCfgSource(res.dbDown ? "file" : "db");
+          // 临时盯盘 tab：挂在最前，虚拟分组（_watchonly=true），不入 DB。
+          const wo = watchonlyRef.current || [];
+          const woGroup = wo.length > 0
+            ? [{ name: "👁 临时盯盘", symbols: wo.map((w) => ({ code: w.code, name: w.name })), _watchonly: true }]
+            : [];
+          setGroupsCfg([...woGroup, ...merged]);
+          setCfgSource(res && res.dbDown ? "file" : "db");
         } catch {
           // host 不可用：保留现有 groupsCfg（不破坏当前视图）
         }
@@ -1374,21 +1441,26 @@ window.__ModuleLoader__.load({
 
       // C 方案：添加股票 = 直写 DB 关注池（经 host 代理 /watchlist），成功后刷新配置。
       // 分组归属由面板（DB bucket）管理，药丸为只读镜像，不再本地新增 symbol。
-      const addStock = useCallback(async (code, name) => {
-        const exists = (groupsCfg || []).some((g) => g.symbols.some((s) => s.code === code));
+      // 入库关注：写 DB 关注池（register+active+bucket），经 host 代理，成功后刷新配置。
+      // bucket = 当前 tab 的真实分组名；虚拟 tab（临时盯盘/未分组/全部关注）传空（进未分组）。
+      const addStock = useCallback(async (code, name, bucket) => {
+        const exists = (groupsCfg || []).some((g) => !g._watchonly && g.symbols.some((s) => s.code === code));
         if (exists) { flash("已在关注池：" + name, "#888888"); return; }
         try {
           const res = await fetch(BASE + "/watchlist", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ action: "add", code, name: name || "" }),
+            body: JSON.stringify({ action: "add", code, name: name || "", bucket: bucket || "" }),
           });
           const json = await res.json().catch(() => ({}));
           if (!res.ok || json.ok !== true) {
             flash("添加失败：" + (json.error || "未知错误"), "#ff5555");
             return;
           }
-          flash("✔ 已添加 " + name + "（已写入关注池）");
+          // 若之前在临时盯盘，升级为入库（从 watchonly 移除，避免重复）
+          const wo = watchonlyRef.current || [];
+          if (wo.some((w) => w.code === code)) setWatchonly(wo.filter((w) => w.code !== code));
+          flash("✔ 已入库关注 " + name + (bucket ? "（进「" + bucket + "」）" : ""));
           setStockQuery("");
           setStockResults(null);
           setShowAdd(null); // 添加完成 → 回到股票列表
@@ -1398,26 +1470,86 @@ window.__ModuleLoader__.load({
         }
       }, [groupsCfg, refreshCfg, flash]);
 
-      // C 方案：分组由面板（DB bucket）管理，药丸是镜像视图 —— 本地建组/改名/删组改为提示
-      const addGroup = useCallback(() => {
-        flash("分组请到面板「⚙️ 管理」中管理（药丸为 DB 镜像）", "#888888");
+      // 临时盯盘：只写 localStorage（不入库、不拉行情、面板不可见）。删除时按来源分流。
+      const addWatchOnly = useCallback(async (code, name) => {
+        const wo = watchonlyRef.current || [];
+        if (wo.some((w) => w.code === code)) { flash("已在临时盯盘：" + name, "#888888"); return; }
+        const inDb = (groupsCfg || []).some((g) => !g._watchonly && g.symbols.some((s) => s.code === code));
+        if (inDb) { flash("已在关注池：" + name, "#888888"); return; }
+        setWatchonly([...wo, { code, name: name || code }]);
+        flash("👁 已临时盯盘 " + name + "（不入库）");
+        setStockQuery("");
+        setStockResults(null);
         setShowAdd(null);
-      }, [flash]);
+        await refreshCfg();
+      }, [groupsCfg, refreshCfg, flash]);
 
-      // 重命名分组（C 方案：禁用本地改名，指向面板管理）
-      const commitRename = useCallback(() => {
-        flash("分组请到面板「⚙️ 管理」中管理（药丸为 DB 镜像）", "#888888");
+      // 新建分组（bucket）：直写 DB（空分组也持久化，会在药丸显示成空 tab）。
+      const addGroup = useCallback(async () => {
+        const n = (groupName || "").trim();
+        if (!n) { flash("请输入分组名", "#ff5555"); return; }
+        try {
+          const res = await fetch(BASE + "/buckets", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ action: "add", bucket: n }),
+          });
+          const json = await res.json().catch(() => ({}));
+          if (!res.ok || json.ok !== true) {
+            flash("创建分组失败：" + (json.error || "未知错误"), "#ff5555");
+            return;
+          }
+          flash("✔ 已创建分组 " + n);
+          setGroupName("");
+          setShowAdd(null);
+          await refreshCfg();
+        } catch {
+          flash("创建分组失败：本地面板服务不可用", "#ff5555");
+        }
+      }, [groupName, refreshCfg, flash]);
+
+      // 重命名分组（bucket）：直写 DB。虚拟 tab（临时盯盘/未分组/全部关注）不可改名。
+      const commitRename = useCallback(async () => {
+        const idx = renameTarget;
+        const g = (idx != null && groupsCfg) ? groupsCfg[idx] : null;
+        const to = (renameEdit || "").trim();
+        if (idx == null || !g) { setRenameEdit(null); setRenameTarget(null); return; }
+        if (g._watchonly || !g.bucket) { flash("该分组不可重命名", "#888888"); setRenameEdit(null); setRenameTarget(null); return; }
+        if (!to || to === g.bucket) { setRenameEdit(null); setRenameTarget(null); return; }
+        try {
+          const res = await fetch(BASE + "/buckets", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ action: "rename", from: g.bucket, to }),
+          });
+          const json = await res.json().catch(() => ({}));
+          if (!res.ok || json.ok !== true) {
+            flash("重命名失败：" + (json.error || "未知错误"), "#ff5555");
+          } else {
+            flash("✔ 已重命名为 " + to);
+            await refreshCfg();
+          }
+        } catch {
+          flash("重命名失败：本地面板服务不可用", "#ff5555");
+        }
         setRenameEdit(null);
         setRenameTarget(null);
-      }, [flash]);
+      }, [renameTarget, renameEdit, groupsCfg, refreshCfg, flash]);
 
-      // C 方案：删除股票 = 从 DB 关注池移除（经 host 代理），成功后刷新配置
+      // 删除股票：按来源分流。临时盯盘→删 localStorage；关注池→取消关注（保留在库）。
       const removeStock = useCallback(async (code, name) => {
+        const wo = watchonlyRef.current || [];
+        if (wo.some((w) => w.code === code)) {
+          setWatchonly(wo.filter((w) => w.code !== code));
+          flash("已取消临时盯盘 " + name, "#888888");
+          await refreshCfg();
+          return;
+        }
         try {
           const res = await fetch(BASE + "/watchlist", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ action: "remove", code }),
+            body: JSON.stringify({ action: "remove", code, clear_bucket: true }),
           });
           const json = await res.json().catch(() => ({}));
           if (!res.ok || json.ok !== true) {
@@ -1427,19 +1559,36 @@ window.__ModuleLoader__.load({
           setData((d) => (d && Array.isArray(d.rows)
             ? { ...d, rows: d.rows.filter((r) => r.code !== code) }
             : d));
-          flash("已从关注池删除 " + name, "#888888");
+          flash("已取消关注 " + name + "（保留在库）", "#888888");
           await refreshCfg(); // 立即同步 DB（不等 60s 轮询）
         } catch {
           flash("删除失败：本地面板服务不可用", "#ff5555");
         }
       }, [refreshCfg, flash]);
 
-      // 删除分组（C 方案：禁用本地删组，指向面板管理）
-      const deleteGroup = useCallback((idx) => {
+      // 删除分组（bucket）：直写 DB，组内股票回到未分组。虚拟 tab 不可删除。
+      const deleteGroup = useCallback(async (idx) => {
         const g = groupsCfg && groupsCfg[idx];
         if (!g) return;
-        flash("分组请到面板「⚙️ 管理」中管理（药丸为 DB 镜像）", "#888888");
-      }, [groupsCfg, flash]);
+        if (g._watchonly || !g.bucket) { flash("该分组不可删除", "#888888"); return; }
+        try {
+          const res = await fetch(BASE + "/buckets", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ action: "delete", bucket: g.bucket }),
+          });
+          const json = await res.json().catch(() => ({}));
+          if (!res.ok || json.ok !== true) {
+            flash("删除分组失败：" + (json.error || "未知错误"), "#ff5555");
+            return;
+          }
+          flash("✔ 已删除分组 " + g.bucket + "（组内股票回到未分组）", "#888888");
+          if (groupIndex >= idx && groupIndex > 0) setGroupIndex((i) => i - 1);
+          await refreshCfg();
+        } catch {
+          flash("删除分组失败：本地面板服务不可用", "#ff5555");
+        }
+      }, [groupsCfg, groupIndex, refreshCfg, flash]);
 
       // 按住胶囊/面板头部拖动（按钮/输入框上不触发）
       const startDrag = useCallback((e, mode) => {
@@ -1490,24 +1639,56 @@ window.__ModuleLoader__.load({
 
       const groups = (data && Array.isArray(data.groups)) ? data.groups : [];
       const rows = (data && Array.isArray(data.rows)) ? data.rows : [];
+      // 组内排序：默认保持后端代码序；chgDesc/chgAsc 按涨跌幅排序，无行情的排最后。
+      const sortedRows = (sortMode === "chgDesc" || sortMode === "chgAsc")
+        ? rows.slice().sort((a, b) => {
+            const an = a.live && typeof a.changePercent === "number";
+            const bn = b.live && typeof b.changePercent === "number";
+            if (an && !bn) return -1;
+            if (!an && bn) return 1;
+            if (!an && !bn) return 0;
+            return sortMode === "chgDesc" ? b.changePercent - a.changePercent : a.changePercent - b.changePercent;
+          })
+        : rows;
       const upCount = rows.filter((r) => r.live && r.changePercent > 0).length;
       const downCount = rows.filter((r) => r.live && r.changePercent < 0).length;
+      // 全局信号（跨分组）：买入在前、卖出在后，字段与普通行对齐便于复用渲染
+      const signalBuy = (data && data.signal && Array.isArray(data.signal.buy)) ? data.signal.buy : [];
+      const signalSell = (data && data.signal && Array.isArray(data.signal.sell)) ? data.signal.sell : [];
+      const signalRows = signalBuy.concat(signalSell);
+      const signalBuyCount = signalBuy.length;
+      const signalSellCount = signalSell.length;
       const themeToggle = react.createElement("button", {
         className: "sk-icon",
         onClick: () => setTheme((t) => (t === "dark" ? "light" : "dark")),
         title: theme === "dark" ? "切换到浅色主题" : "切换到暗色主题",
       }, theme === "dark" ? "☀️" : "🌙");
+      const SORT_CYCLE = ["default", "chgDesc", "chgAsc"];
+      const sortToggle = react.createElement("button", {
+        className: "sk-icon" + (sortMode !== "default" ? " sk-sort-active" : ""),
+        onClick: () => { const i = SORT_CYCLE.indexOf(sortMode); setSortMode(SORT_CYCLE[(i + 1) % SORT_CYCLE.length]); },
+        title: sortMode === "default" ? "排序：代码序（点击→涨跌幅降序）" : sortMode === "chgDesc" ? "排序：涨跌幅降序（点击→涨跌幅升序）" : "排序：涨跌幅升序（点击→代码序）",
+      }, sortMode === "default" ? "⇅" : sortMode === "chgDesc" ? "↓" : "↑");
 
       // 面板右下角拉伸手柄（列表页与详情页共用）
       const resizeHandles = react.createElement("div", { className: "sk-resize sk-resize-br", title: "拉伸面板", onMouseDown: (e) => startResize(e, "br") });
 
       // —— 折叠态：可拖动小药丸 ——
       if (!expanded) {
+        const hasSignal = signalBuyCount > 0 || signalSellCount > 0;
+        const signalBadge = hasSignal
+          ? react.createElement("span", { className: "sk-pill-signal" },
+              signalBuyCount > 0 ? react.createElement("span", { key: "b", style: { color: DOWN } }, "买" + signalBuyCount) : null,
+              signalSellCount > 0 ? react.createElement("span", { key: "s", style: { color: UP } }, "卖" + signalSellCount) : null)
+          : null;
         const summary = (data && rows.length > 0)
           ? react.createElement("span", { className: "sk-pill-summary" },
               react.createElement("span", { style: { color: UP } }, upCount + "↑"),
-              react.createElement("span", { style: { color: DOWN } }, downCount + "↓"))
-          : react.createElement("span", { className: "sk-pill-loading" }, error ? "⚠" : "…");
+              react.createElement("span", { style: { color: DOWN } }, downCount + "↓"),
+              signalBadge)
+          : (hasSignal
+              ? react.createElement("span", { className: "sk-pill-summary" }, signalBadge)
+              : react.createElement("span", { className: "sk-pill-loading" }, error ? "⚠" : "…"));
         // 贴边吸附态：胶囊吸附到屏幕边缘后变为半球，显示涨/跌家数
         const dock = (() => {
           if (!pos) return null;
@@ -1520,11 +1701,15 @@ window.__ModuleLoader__.load({
           return null;
         })();
         const dockBody = dock
-          ? (data && rows.length > 0
+          ? (hasSignal
               ? react.createElement("span", { className: "sk-dock-body" },
-                  react.createElement("span", { className: "sk-dock-count", style: { color: UP } }, upCount + "↑"),
-                  react.createElement("span", { className: "sk-dock-count", style: { color: DOWN } }, downCount + "↓"))
-              : react.createElement("span", { className: "sk-pill-loading" }, error ? "⚠" : "…"))
+                  signalBuyCount > 0 ? react.createElement("span", { className: "sk-dock-count", style: { color: DOWN } }, "买" + signalBuyCount) : null,
+                  signalSellCount > 0 ? react.createElement("span", { className: "sk-dock-count", style: { color: UP } }, "卖" + signalSellCount) : null)
+              : (data && rows.length > 0
+                  ? react.createElement("span", { className: "sk-dock-body" },
+                      react.createElement("span", { className: "sk-dock-count", style: { color: UP } }, upCount + "↑"),
+                      react.createElement("span", { className: "sk-dock-count", style: { color: DOWN } }, downCount + "↓"))
+                  : react.createElement("span", { className: "sk-pill-loading" }, error ? "⚠" : "…")))
           : null;
         if (pillRef.current) pillWidthRef.current = pillRef.current.offsetWidth || PILL_W;
         const pill = react.createElement("div", {
@@ -1682,8 +1867,17 @@ window.__ModuleLoader__.load({
       const header = react.createElement("div", { className: "sk-header", onMouseDown: (e) => startDrag(e, "panel"), title: "按住此处可拖动面板" },
         react.createElement("span", { className: "sk-title" }, "📈 自选股盯盘"),
         react.createElement("span", { className: "sk-tabs" },
-          groups.map((g, i) =>
-            react.createElement("span", { key: i, className: "sk-tab-wrap" + (i === groupIndex ? " sk-tab-wrap-active" : "") },
+          react.createElement("span", { key: "__signal__", className: "sk-tab-wrap" + (signalView ? " sk-tab-wrap-active" : "") },
+            react.createElement("button", {
+              className: "sk-tab sk-tab-signal" + (signalView ? " sk-tab-active" : ""),
+              onClick: () => setSignalView(true),
+              title: "信号聚合：所有分组触发买入/卖出的股票",
+            }, "⚡ 信号" + (signalRows.length > 0 ? " (" + signalRows.length + ")" : ""))),
+          groups.map((g, i) => {
+            const gcfg = (groupsCfg && groupsCfg[i]) || {};
+            const isVirtual = !!gcfg._watchonly || !gcfg.bucket; // 临时盯盘 / 未分组 / 全部关注
+            const tabActive = i === groupIndex && !signalView;
+            return react.createElement("span", { key: "g" + i, className: "sk-tab-wrap" + (tabActive ? " sk-tab-wrap-active" : "") },
               renameTarget === i
                 ? react.createElement("input", {
                     className: "sk-rename-input",
@@ -1695,35 +1889,44 @@ window.__ModuleLoader__.load({
                     onBlur: () => commitRename(),
                   })
                 : react.createElement("button", {
-                    className: "sk-tab" + (i === groupIndex ? " sk-tab-active" : ""),
-                    onClick: () => setGroupIndex(i),
-                    onDoubleClick: (e) => { e.preventDefault(); setRenameTarget(i); setRenameEdit(g.name); },
-                    title: "双击重命名「" + g.name + "」",
+                    className: "sk-tab" + (tabActive ? " sk-tab-active" : ""),
+                    onClick: () => { setSignalView(false); setGroupIndex(i); },
+                    onDoubleClick: (e) => {
+                      e.preventDefault();
+                      if (isVirtual) { flash("该分组不可重命名", "#888888"); return; }
+                      setRenameTarget(i); setRenameEdit(g.name);
+                    },
+                    title: isVirtual ? "该分组不可重命名" : "双击重命名「" + g.name + "」",
                   }, g.name + (g.count > 0 ? " (" + g.count + ")" : "")),
-              react.createElement("button", {
+              isVirtual ? null : react.createElement("button", {
                 className: "sk-tab-del",
                 title: "删除分组「" + g.name + "」",
                 onClick: (e) => { e.stopPropagation(); deleteGroup(i); },
-              }, "✕")))),
+              }, "✕"));
+          })),
         react.createElement("span", { className: "sk-right" },
           react.createElement("span", { className: "sk-countdown" }, "⏱" + countdown + "s"),
           themeToggle,
+          sortToggle,
           react.createElement("button", { className: "sk-icon", onClick: () => load(true), title: "立即刷新" }, "⟳"),
           react.createElement("button", { className: "sk-icon", onClick: () => setExpanded(false), title: "折叠" }, "—")));
 
       // 面板定高时列表区域 flex:1 1 0 强制填满并滚动
       const rowsFill = size ? { flex: "1 1 0", minHeight: 0 } : undefined;
-      const body = rows.length === 0
-        ? react.createElement("div", { className: "sk-empty", style: rowsFill }, error ? "行情获取失败，请稍后重试" : "（当前分组为空）")
+      const displayRows = signalView ? signalRows : sortedRows;
+      const body = displayRows.length === 0
+        ? react.createElement("div", { className: "sk-empty", style: rowsFill }, error ? "行情获取失败，请稍后重试" : (signalView ? "暂无触发买入/卖出的股票" : "（当前分组为空）"))
         : react.createElement("div", { className: "sk-rows", style: rowsFill },
-            rows.map((row) => {
+            displayRows.map((row) => {
               const isUp = row.live && row.changePercent >= 0;
               const color = row.live ? (isUp ? UP : DOWN) : FLAT;
               const trig = triggerMeta(row.trigger);
               const tip = "高 " + (row.live ? formatPrice(row.high) : "-") + " · 低 " + (row.live ? formatPrice(row.low) : "-") + " · 量 " + (row.live ? row.volume : "-");
               return react.createElement("div", { key: row.code, className: "sk-row", onClick: () => setView({ code: row.code }), title: tip },
                 react.createElement("span", { className: "sk-name" },
-                  react.createElement("span", { className: "sk-name-text", style: { color: row.live ? "var(--sk-text)" : FLAT } }, row.name),
+                  react.createElement("span", { className: "sk-name-row" },
+                    react.createElement("span", { className: "sk-name-text", style: { color: row.live ? "var(--sk-text)" : FLAT } }, row.name),
+                    boardChip(row.code)),
                   react.createElement("span", { className: "sk-code" }, row.code.replace(/^(sh|sz)/, ""))),
                 react.createElement(Sparkline, { prices: row.minutes, color }),
                 react.createElement("span", { className: "sk-price", style: { color } }, row.live ? formatPrice(row.price) : "--"),
@@ -1769,15 +1972,24 @@ window.__ModuleLoader__.load({
                 ? react.createElement("div", { className: "sk-add-empty" }, "未找到匹配的股票")
                 : react.createElement("div", { className: "sk-add-results" },
                     stockResults.map((s) => {
-                      const inCurrent = (groupsCfg && groupsCfg[groupIndex] && groupsCfg[groupIndex].symbols.some((x) => x.code === s.code)) || false;
-                      return react.createElement("button", {
+                      const inAny = (groupsCfg || []).some((g) => g.symbols.some((x) => x.code === s.code));
+                      const inWO = (watchonly || []).some((w) => w.code === s.code);
+                      const added = inAny || inWO;
+                      const curG = (groupsCfg && groupsCfg[groupIndex]) || {};
+                      const currentBucket = (curG._watchonly || !curG.bucket) ? "" : curG.bucket;
+                      return react.createElement("div", {
                         key: s.code,
-                        className: "sk-add-result" + (inCurrent ? " sk-add-result-added" : ""),
-                        onClick: () => addStock(s.code, s.name),
+                        className: "sk-add-result" + (added ? " sk-add-result-added" : ""),
                       },
                         react.createElement("span", { className: "sk-add-result-code" }, s.code.replace(/^(sh|sz)/, "")),
                         react.createElement("span", { className: "sk-add-result-name" }, s.name),
-                        inCurrent ? react.createElement("span", { className: "sk-add-result-badge" }, "已添加") : null);
+                        boardChip(s.code),
+                        added
+                          ? react.createElement("span", { className: "sk-add-result-badge" }, inWO ? "盯盘中" : "已关注")
+                          : [
+                              react.createElement("button", { key: "in", className: "sk-add-result-act", title: "入库关注（写关注池，面板可见" + (currentBucket ? "，进「" + currentBucket + "」" : "") + "）", onClick: () => addStock(s.code, s.name, currentBucket) }, "入库"),
+                              react.createElement("button", { key: "wo", className: "sk-add-result-act sk-add-result-wo", title: "临时盯盘（不入库，面板不可见）", onClick: () => addWatchOnly(s.code, s.name) }, "👁 盯盘"),
+                            ]);
                     }))),
           showAdd === "group" && react.createElement("div", { className: "sk-add-group" },
             react.createElement("input", {
@@ -1792,7 +2004,7 @@ window.__ModuleLoader__.load({
 
       // 分组列表底部：添加股票 / 分组 按钮
       const addBar = react.createElement("div", { className: "sk-add-bar" },
-        react.createElement("button", { className: "sk-add-bar-btn", onClick: () => setShowAdd("stock") }, "＋ 添加股票"),
+        react.createElement("button", { className: "sk-add-bar-btn sk-add-bar-primary", onClick: () => setShowAdd("stock") }, "＋ 添加股票"),
         react.createElement("button", { className: "sk-add-bar-btn", onClick: () => setShowAdd("group") }, "🗂 添加分组"));
 
       return react.createElement("div", { className: "sk-panel sk-theme-" + theme, style: panelStyle }, header, body, addBar, footer, resizeHandles, addPanel);

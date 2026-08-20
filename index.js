@@ -247,12 +247,12 @@ async function fetchDbWatchlist() {
  * DB 关注池行 → stock-watch 分组数组。
  * 分组策略（C 方案 · 严格单一来源）：
  *   - 成员：只保留 active=1 的关注池（服务端已过滤），按 code 去重。
- *   - 分组 tab：优先用 DB 的 bucket（互斥单分组）生成 tab；
- *     无 bucket 的股票进「全部关注」兜底 tab；DB groups（多标签）不映射为 tab（药丸是镜像视图）。
+ *   - 分组 tab：用 DB 的 bucket（互斥单分组）生成 tab；buckets 表里的空分组也生成 tab
+ *     （否则「新建空分组」会因无股票被过滤掉，用户误以为没建成）。
+ *   - 无 bucket 的股票进「未分组」兜底 tab（无任何分组时显示「全部关注」）。
  *   - 代码统一转带市场前缀；名称从 DB 取（腾讯行情名称只是展示覆盖）。
  */
-function dbWatchlistToGroups(stocks) {
-  const groups = [];
+function dbWatchlistToGroups(stocks, buckets) {
   const byBucket = new Map();
   const seen = new Set();
   for (const s of stocks) {
@@ -267,16 +267,50 @@ function dbWatchlistToGroups(stocks) {
     if (!byBucket.has(bucket)) byBucket.set(bucket, []);
     byBucket.get(bucket).push(sym);
   }
-  const bucketNames = [...byBucket.keys()];
-  if (bucketNames.length === 0 || (bucketNames.length === 1 && bucketNames[0] === "")) {
-    // 无 bucket：单「全部关注」tab
-    groups.push({ name: "全部关注", symbols: byBucket.get("") || [] });
+  // 真实分组名集合：关注池非空 bucket ∪ buckets 表（含空分组）
+  const names = new Set();
+  for (const b of byBucket.keys()) if (b) names.add(b);
+  for (const b of (buckets || [])) {
+    const n = (b && b.bucket) ? String(b.bucket).trim() : "";
+    if (n) names.add(n);
+  }
+  const groups = [];
+  if (names.size === 0) {
+    // 无任何分组：单「全部关注」tab
+    groups.push({ name: "全部关注", bucket: "", symbols: byBucket.get("") || [] });
   } else {
-    for (const [bucket, symbols] of byBucket) {
-      groups.push({ name: bucket || "未分组", symbols });
+    const ungrouped = byBucket.get("") || [];
+    if (ungrouped.length > 0) groups.push({ name: "未分组", bucket: "", symbols: ungrouped });
+    // 按组内股票数降序，空分组靠后，同数按名称
+    const sorted = [...names].sort((a, b) => {
+      const na = (byBucket.get(a) || []).length;
+      const nb = (byBucket.get(b) || []).length;
+      if (na !== nb) return nb - na;
+      return a < b ? -1 : a > b ? 1 : 0;
+    });
+    for (const name of sorted) {
+      // bucket 字段 = 真实分组名；空 bucket 的兜底 tab「未分组」bucket 记为 ""，
+      // 供前端区分「真实分组」与「兜底/虚拟 tab」（后者不可改名/删除、加票进未分组）。
+      groups.push({ name, bucket: name, symbols: byBucket.get(name) || [] });
     }
   }
-  return groups.filter((g) => g.symbols.length > 0 || g.name === "全部关注");
+  return groups;
+}
+
+/** 从本地 API 拉全部分组名（含空分组），失败返回 null */
+async function fetchDbBuckets() {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), DB_API_TIMEOUT);
+  try {
+    const res = await fetch(`${dbApiBase()}/api/buckets`, { signal: ctrl.signal });
+    if (!res.ok) return null;
+    const json = await res.json();
+    return json && Array.isArray(json.buckets) ? json.buckets : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** 带 5s TTL 缓存的 DB 分组读取（/config 与 /quotes 共用） */
@@ -285,7 +319,8 @@ async function loadDbGroups() {
   if (dbGroupsCache && now - dbGroupsCacheAt < dbCacheTtl()) return dbGroupsCache;
   const stocks = await fetchDbWatchlist();
   if (!stocks) return null;
-  dbGroupsCache = dbWatchlistToGroups(stocks);
+  const buckets = await fetchDbBuckets();
+  dbGroupsCache = dbWatchlistToGroups(stocks, buckets);
   dbGroupsCacheAt = now;
   return dbGroupsCache;
 }
@@ -569,7 +604,7 @@ function apply(ctx) {
   });
 
   // C 方案：药丸内增删关注直写本地 DB（严格单一来源，不回写 localStorage 分组）。
-  // body: { action: "add"|"remove", code: "sh600000"|"600000", name?: string }
+  // body: { action: "add"|"remove", code: "sh600000"|"600000", name?: string, bucket?: string }
   register("/dsh-stock-watch/watchlist", async (req, res) => {
     const body = await readBody(req);
     const action = body.action;
@@ -586,8 +621,8 @@ function apply(ctx) {
     const timer = setTimeout(() => ctrl.abort(), DB_API_TIMEOUT);
     try {
       const payload = action === "add"
-        ? { code, name: typeof body.name === "string" ? body.name : "" }
-        : { codes: [code] };
+        ? { code, name: typeof body.name === "string" ? body.name : "", bucket: typeof body.bucket === "string" ? body.bucket : "" }
+        : { codes: [code], clear_bucket: body.clear_bucket === true };
       const r = await fetch(`${dbApiBase()}/api/watchlist/${action === "add" ? "add" : "remove"}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -601,6 +636,52 @@ function apply(ctx) {
       }
       dbGroupsCache = null; // 失效缓存，下次 /config 重新拉 DB
       sendJson(res, 200, { ok: true, action, code });
+    } catch {
+      sendJson(res, 502, { ok: false, error: `本地 API 不可用（${dbApiBase()}，请先启动 stock-panel 面板服务）` });
+    } finally {
+      clearTimeout(timer);
+    }
+  });
+
+  // 分组（bucket）写操作代理：药丸的分组增删改名直写本地 DB（严格单一来源）。
+  // body: { action: "add"|"rename"|"delete", bucket?: string, from?: string, to?: string }
+  register("/dsh-stock-watch/buckets", async (req, res) => {
+    const body = await readBody(req);
+    const action = body.action;
+    const bucket = typeof body.bucket === "string" ? body.bucket.trim().slice(0, 32) : "";
+    const from = typeof body.from === "string" ? body.from.trim().slice(0, 32) : "";
+    const to = typeof body.to === "string" ? body.to.trim().slice(0, 32) : "";
+    let path = "";
+    let payload = {};
+    if (action === "add") {
+      if (!bucket) { sendJson(res, 400, { ok: false, error: "分组名不能为空" }); return; }
+      path = "/api/buckets/add"; payload = { bucket };
+    } else if (action === "rename") {
+      if (!from || !to) { sendJson(res, 400, { ok: false, error: "需要 from 和 to" }); return; }
+      path = "/api/buckets/rename"; payload = { from, to };
+    } else if (action === "delete") {
+      if (!bucket) { sendJson(res, 400, { ok: false, error: "分组名不能为空" }); return; }
+      path = "/api/buckets/delete"; payload = { bucket };
+    } else {
+      sendJson(res, 400, { ok: false, error: 'action 必须为 "add" | "rename" | "delete"' });
+      return;
+    }
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), DB_API_TIMEOUT);
+    try {
+      const r = await fetch(`${dbApiBase()}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: ctrl.signal,
+      });
+      const json = await r.json().catch(() => ({}));
+      if (!r.ok || json.ok !== true) {
+        sendJson(res, 502, { ok: false, error: (json && json.error) || `本地 API 返回 ${r.status}` });
+        return;
+      }
+      dbGroupsCache = null; // 失效缓存，下次 /config 重新拉 DB
+      sendJson(res, 200, { ok: true, action });
     } catch {
       sendJson(res, 502, { ok: false, error: `本地 API 不可用（${dbApiBase()}，请先启动 stock-panel 面板服务）` });
     } finally {
@@ -646,16 +727,30 @@ function apply(ctx) {
       }
       const groups = loaded.groups;
       const safeIdx = groups.length > 0 ? Math.min(groupIndex, groups.length - 1) : 0;
-      const group = groups[safeIdx] || groups[0] || null;
-      const symbols = group ? group.symbols : [];
-      const results = await Promise.all(symbols.map((s) => fetchQuoteResult(s, includeMinutes)));
-      const rows = [];
-      let live = 0;
-      let firstError = null;
-      for (let i = 0; i < symbols.length; i++) {
-        const sym = symbols[i];
-        const parsed = results[i] ?? { quote: null, prices: [] };
-        if (!parsed.quote && !firstError) firstError = "拉取失败";
+      const curGroup = groups[safeIdx] || groups[0] || null;
+
+      // 全部分组去重后的 symbols（保持分组顺序），用于算全局买入/卖出信号
+      const allSymbols = [];
+      const seenCodes = new Set();
+      for (const g of groups) {
+        for (const s of (g.symbols || [])) {
+          if (seenCodes.has(s.code)) continue;
+          seenCodes.add(s.code);
+          allSymbols.push(s);
+        }
+      }
+      const curCodes = new Set((curGroup ? curGroup.symbols : []).map((s) => s.code));
+
+      // 并发拉全部行情（当前分组的按需带分钟数据，其余只取快照算信号）
+      const allResults = await Promise.all(
+        allSymbols.map((s) => fetchQuoteResult(s, includeMinutes && curCodes.has(s.code)))
+      );
+      const byCode = new Map();
+      for (let i = 0; i < allSymbols.length; i++) {
+        byCode.set(allSymbols[i].code, allResults[i] ?? { quote: null, prices: [] });
+      }
+
+      const makeRow = (sym, parsed) => {
         const q2 = parsed.quote;
         const row = {
           code: sym.code,
@@ -666,7 +761,6 @@ function apply(ctx) {
         if (sym.buyPrice !== undefined) row.buyPrice = sym.buyPrice;
         if (sym.sellPrice !== undefined) row.sellPrice = sym.sellPrice;
         if (q2) {
-          live += 1;
           row.live = true;
           row.price = q2.price;
           row.changePercent = q2.changePercent;
@@ -676,10 +770,38 @@ function apply(ctx) {
           row.volume = q2.volume;
           row.amount = q2.amount;
           row.trigger = computeTrigger(q2.price, sym.buyPrice, sym.sellPrice);
-          if (includeMinutes && parsed.prices && parsed.prices.length > 0) row.minutes = parsed.prices;
+          if (parsed.prices && parsed.prices.length > 0) row.minutes = parsed.prices;
         }
+        return row;
+      };
+
+      // 当前分组的 rows（保持原顺序）
+      const rows = [];
+      let live = 0;
+      let firstError = null;
+      for (const sym of (curGroup ? curGroup.symbols : [])) {
+        const parsed = byCode.get(sym.code);
+        if (!parsed || !parsed.quote) {
+          if (!firstError) firstError = "拉取失败";
+          rows.push(makeRow(sym, { quote: null, prices: [] }));
+          continue;
+        }
+        const row = makeRow(sym, parsed);
+        if (row.live) live += 1;
         rows.push(row);
       }
+
+      // 全局信号：遍历全部股票，收集触发买入/卖出的（含当前分组）
+      const signalBuy = [];
+      const signalSell = [];
+      for (const sym of allSymbols) {
+        const parsed = byCode.get(sym.code);
+        if (!parsed || !parsed.quote) continue;
+        const row = makeRow(sym, parsed);
+        if (row.trigger === "buy") signalBuy.push(row);
+        else if (row.trigger === "sell") signalSell.push(row);
+      }
+
       sendJson(res, 200, {
         groups: groups.map((g) => ({ name: g.name, count: g.symbols.length })),
         groupIndex: safeIdx,
@@ -688,6 +810,7 @@ function apply(ctx) {
         updatedAt: Date.now(),
         config: { source: loaded.source, path: loaded.path },
         diag: { firstError },
+        signal: { buy: signalBuy, sell: signalSell },
       });
     } catch (e) {
       sendJson(res, 500, { error: String(e?.message ?? e) });

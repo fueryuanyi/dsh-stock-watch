@@ -1823,6 +1823,7 @@ window.__ModuleLoader__.load({
             react.createElement("div", { className: "sk-detail-top" },
               react.createElement("button", { className: "sk-back", onClick: () => setView(null) }, "← 返回列表"),
               react.createElement("button", { className: "sk-analyze", onClick: () => analyzeStock(), disabled: analyzing }, analyzing ? "📈 分析中…" : "📈 投资研究报告"),
+              react.createElement("button", { className: "sk-analyze", onClick: () => { if (view && view.code) window.open("http://localhost:8888/index.html#" + String(view.code).replace(/^(sh|sz|bj)/i, ""), "_blank"); }, title: "在 stock-panel 面板打开该股趋势图" }, "📊 面板趋势"),
               react.createElement("button", { className: "sk-icon", onClick: () => setExpanded(false), title: "最小化回胶囊" }, "—")),
             react.createElement("div", { className: "sk-detail-info" },
               react.createElement("span", { className: "sk-detail-name" }, row ? row.name : view.code),

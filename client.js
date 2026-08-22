@@ -21,7 +21,7 @@ window.__ModuleLoader__.load({
     styleTag.textContent = `
 .sk-theme-dark{--sk-panel-bg:rgba(13,17,26,.96);--sk-pill-bg:rgba(13,17,26,.93);--sk-border:rgba(255,255,255,.16);--sk-border-soft:rgba(255,255,255,.08);--sk-text:#e5e7eb;--sk-dim:#9ca3af;--sk-muted:#6b7280;--sk-muted-strong:#4b5563;--sk-hover:rgba(255,255,255,.06);--sk-cyan:#22d3ee;--sk-cyan-soft:rgba(34,211,238,.16);--sk-cyan-border:rgba(34,211,238,.5);--sk-shadow:0 8px 32px rgba(0,0,0,.5)}
 .sk-theme-light{--sk-panel-bg:rgba(255,255,255,.97);--sk-pill-bg:rgba(255,255,255,.95);--sk-border:rgba(15,23,42,.14);--sk-border-soft:rgba(15,23,42,.08);--sk-text:#1f2937;--sk-dim:#4b5563;--sk-muted:#6b7280;--sk-muted-strong:#9ca3af;--sk-hover:rgba(15,23,42,.06);--sk-cyan:#0891b2;--sk-cyan-soft:rgba(8,145,178,.12);--sk-cyan-border:rgba(8,145,178,.5);--sk-shadow:0 8px 32px rgba(15,23,42,.18)}
-.sk-pill{position:fixed;top:14px;right:16px;z-index:9999;display:flex;align-items:center;gap:8px;padding:6px 12px;border-radius:999px;background:var(--sk-pill-bg);border:1px solid var(--sk-border);color:var(--sk-text);cursor:pointer;user-select:none;font:12px/1.4 ui-monospace,SFMono-Regular,Consolas,'Courier New',monospace;box-shadow:0 4px 18px rgba(0,0,0,.35);backdrop-filter:blur(8px);pointer-events:auto}
+.sk-pill{position:fixed;top:14px;right:16px;z-index:1000002;display:flex;align-items:center;gap:8px;padding:6px 12px;border-radius:999px;background:var(--sk-pill-bg);border:1px solid var(--sk-border);color:var(--sk-text);cursor:pointer;user-select:none;font:12px/1.4 ui-monospace,SFMono-Regular,Consolas,'Courier New',monospace;box-shadow:0 4px 18px rgba(0,0,0,.35);backdrop-filter:blur(8px);pointer-events:auto}
 .sk-pill:hover{border-color:var(--sk-cyan-border)}
 .sk-pill-title{font-weight:700;color:var(--sk-cyan);white-space:nowrap}
 .sk-pill-summary{display:inline-flex;gap:6px;font-weight:600}
@@ -36,7 +36,7 @@ window.__ModuleLoader__.load({
 .sk-dock-body{display:flex;flex-direction:column;align-items:center;gap:0;line-height:1.05}
 .sk-dock-count{font-size:10px;font-weight:700;white-space:nowrap}
 /* 胶囊悬浮扇形菜单：全屏透明层（不挡点击），选项本身可点；GSAP 驱动位移/缩放/透明度 */
-.sk-fan{position:fixed;inset:0;z-index:9998;pointer-events:none;visibility:hidden}
+.sk-fan{position:fixed;inset:0;z-index:1000001;pointer-events:none;visibility:hidden}
 .sk-fan-item{position:absolute;left:0;top:0;display:inline-flex;align-items:center;gap:5px;padding:5px 11px;border-radius:999px;background:var(--sk-pill-bg);border:1px solid var(--sk-cyan-border);color:var(--sk-text);font:11px/1.3 ui-monospace,SFMono-Regular,Consolas,'Courier New',monospace;cursor:pointer;box-shadow:0 6px 22px rgba(0,0,0,.38);backdrop-filter:blur(8px);pointer-events:auto;white-space:nowrap;transition:background-color .18s ease,border-color .18s ease,color .18s ease,box-shadow .18s ease,filter .18s ease}
 /* hover：青底着色 + 青色光晕；上浮/缩放由 GSAP 驱动（CSS 独立变换属性会被 GSAP 内联的 translate:none 覆盖） */
 .sk-fan-item:hover{background:var(--sk-cyan-soft);border-color:var(--sk-cyan);color:var(--sk-cyan);box-shadow:0 0 0 1px rgba(34,211,238,.22),0 10px 26px rgba(34,211,238,.22),0 4px 14px rgba(0,0,0,.35);filter:brightness(1.08)}
@@ -45,8 +45,8 @@ window.__ModuleLoader__.load({
 .sk-fan-item-disabled,.sk-fan-item-disabled:hover{opacity:.4;border-color:var(--sk-border);color:var(--sk-muted);background:transparent;cursor:not-allowed;filter:none;box-shadow:0 6px 22px rgba(0,0,0,.38)}
 .sk-fan-icon{font-size:13px}
 /* 折叠态反馈 toast */
-.sk-toast{position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:10000;background:var(--sk-pill-bg);border:1px solid var(--sk-border);border-radius:8px;padding:6px 14px;font:11px/1.4 ui-monospace,SFMono-Regular,Consolas,'Courier New',monospace;box-shadow:0 6px 22px rgba(0,0,0,.38);pointer-events:none;white-space:nowrap}
-.sk-panel{position:fixed;top:14px;right:16px;z-index:9999;width:400px;max-height:78vh;display:flex;flex-direction:column;border-radius:12px;overflow:hidden;background:var(--sk-panel-bg);border:1px solid var(--sk-border);color:var(--sk-text);box-shadow:var(--sk-shadow);backdrop-filter:blur(10px);font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,'Courier New',monospace;pointer-events:auto}
+.sk-toast{position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:1000003;background:var(--sk-pill-bg);border:1px solid var(--sk-border);border-radius:8px;padding:6px 14px;font:11px/1.4 ui-monospace,SFMono-Regular,Consolas,'Courier New',monospace;box-shadow:0 6px 22px rgba(0,0,0,.38);pointer-events:none;white-space:nowrap}
+.sk-panel{position:fixed;top:14px;right:16px;z-index:1000002;width:400px;max-height:78vh;display:flex;flex-direction:column;border-radius:12px;overflow:hidden;background:var(--sk-panel-bg);border:1px solid var(--sk-border);color:var(--sk-text);box-shadow:var(--sk-shadow);backdrop-filter:blur(10px);font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,'Courier New',monospace;pointer-events:auto}
 .sk-header{display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--sk-border-soft)}
 .sk-title{font-weight:700;color:var(--sk-cyan);white-space:nowrap}
 .sk-tabs{display:flex;gap:4px;flex:1;min-width:0;overflow-x:auto;scrollbar-width:none}
@@ -2020,13 +2020,17 @@ window.__ModuleLoader__.load({
      * @param ctx - client root context。
      */
     function apply(ctx) {
+      const reactDom = require("react-dom");
       ctx.slots.inject("shell.overlay", () => ctx.slots.register({
         name: "shell.overlay",
         id: "dsh-stock-watch",
-      }, (props) => react.createElement(WatchPanel, Object.assign({}, props, {
-        connection: ctx.get("connection"),
-        sessionsService: ctx.get("sessions"),
-      }))));
+      }, (props) => reactDom.createPortal(
+        react.createElement(WatchPanel, Object.assign({}, props, {
+          connection: ctx.get("connection"),
+          sessionsService: ctx.get("sessions"),
+        })),
+        document.body
+      )));
     }
 
     exports.apply = apply;

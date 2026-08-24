@@ -1086,17 +1086,33 @@ window.__ModuleLoader__.load({
         });
         setData((d) => {
           if (!d || !Array.isArray(d.rows)) return d;
-          return {
-            ...d,
-            rows: d.rows.map((r) => {
-              if (r.code !== code) return r;
-              const copy = { ...r };
-              if (price === undefined) delete copy[key];
-              else copy[key] = price;
-              copy.trigger = copy.live ? computeTrigger(copy.price, copy.buyPrice, copy.sellPrice) : "none";
-              return copy;
-            }),
+          const updateRow = (r) => {
+            if (r.code !== code) return r;
+            const copy = { ...r };
+            if (price === undefined) delete copy[key];
+            else copy[key] = price;
+            copy.trigger = copy.live ? computeTrigger(copy.price, copy.buyPrice, copy.sellPrice) : "none";
+            return copy;
           };
+          const rows = d.rows.map(updateRow);
+          // 同步全局「⚡ 信号」列表：目标价变化后立即重算该股票的触发状态，
+          // 不再等下一次 /quotes 轮询（否则清空目标价后信号列表还残留旧股票）。
+          const hasSignal = d.signal && Array.isArray(d.signal.buy) && Array.isArray(d.signal.sell);
+          if (!hasSignal) return { ...d, rows };
+          const signal = {
+            buy: d.signal.buy.filter((r) => r.code !== code),
+            sell: d.signal.sell.filter((r) => r.code !== code),
+          };
+          // 跨分组信号可能不在当前 rows 里：从原 signal 列表找该股票的行情行
+          const row = rows.find((r) => r.code === code)
+            || d.signal.buy.find((r) => r.code === code)
+            || d.signal.sell.find((r) => r.code === code);
+          if (row) {
+            const updated = updateRow(row);
+            if (updated.trigger === "buy") signal.buy.push(updated);
+            else if (updated.trigger === "sell") signal.sell.push(updated);
+          }
+          return { ...d, rows, signal };
         });
       }, []);
 

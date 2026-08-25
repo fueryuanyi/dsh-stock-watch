@@ -147,7 +147,9 @@ const FAN_PROMPTS = {
 每项一句话，总字数控制在150字以内。`,
 };
 
-const MINUTE_API = "https://web.ifzq.gtimg.cn/appstock/app/minute/query?code={code}&r=0.1";
+// 2026-08-25: web.ifzq.gtimg.cn 的 /appstock/app/minute/query 被腾讯 WAF 拦截（HTTP 501→waf.tencent.com/501page.html），
+// 同路径换 ifzq.gtimg.cn（无 web. 前缀）实测正常；K 线接口 web.ifzq 仍可用，保持不动。
+const MINUTE_API = "https://ifzq.gtimg.cn/appstock/app/minute/query?code={code}&r=0.1";
 const KLINE_API = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={code},{period},,,{count},qfq";
 
 const DEFAULT_GROUPS = [

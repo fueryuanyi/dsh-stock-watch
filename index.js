@@ -175,11 +175,28 @@ function normalizeSymbol(raw) {
   if (typeof o.code !== "string" || o.code.length === 0) return null;
   const s = { code: o.code };
   if (typeof o.name === "string" && o.name.trim()) s.name = o.name.trim();
+  // 标签式分组（stock-panel DB stocks.groups，只读镜像）：透传给客户端行渲染。
+  const tags = normalizeTags(o.groups !== undefined ? o.groups : o.tags);
+  if (tags.length > 0) s.tags = tags;
   const buy = normalizePrice(o.buyPrice);
   if (buy !== undefined) s.buyPrice = buy;
   const sell = normalizePrice(o.sellPrice);
   if (sell !== undefined) s.sellPrice = sell;
   return s;
+}
+
+/** 标签数组清洗：非空字符串、去重、单条 ≤16 字、最多 6 条 */
+function normalizeTags(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const t of raw) {
+    if (typeof t !== "string") continue;
+    const v = t.trim().slice(0, 16);
+    if (!v || out.includes(v)) continue;
+    out.push(v);
+    if (out.length >= 6) break;
+  }
+  return out;
 }
 
 function normalizeGroup(raw) {
@@ -265,6 +282,9 @@ function dbWatchlistToGroups(stocks, buckets) {
     seen.add(code);
     const sym = { code };
     if (s.name && String(s.name).trim()) sym.name = String(s.name).trim();
+    // DB 的 labels（标签，可多选）一并带上，供药丸行内展示；bucket（互斥单分组）仍是 tab 来源。
+    const tags = normalizeTags(s.groups);
+    if (tags.length > 0) sym.tags = tags;
     const bucket = (s.bucket || "").trim();
     if (!byBucket.has(bucket)) byBucket.set(bucket, []);
     byBucket.get(bucket).push(sym);
@@ -762,6 +782,7 @@ function apply(ctx) {
         };
         if (sym.buyPrice !== undefined) row.buyPrice = sym.buyPrice;
         if (sym.sellPrice !== undefined) row.sellPrice = sym.sellPrice;
+        if (Array.isArray(sym.tags) && sym.tags.length > 0) row.tags = sym.tags;
         if (q2) {
           row.live = true;
           row.price = q2.price;

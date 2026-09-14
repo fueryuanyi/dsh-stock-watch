@@ -80,6 +80,9 @@ window.__ModuleLoader__.load({
 .sk-board-kc{color:#a78bfa;border-color:rgba(167,139,250,.55)}
 .sk-board-bj{color:#ff5555;border-color:rgba(255,85,85,.55)}
 .sk-code{color:var(--sk-muted);font-size:11px}
+.sk-tags{display:flex;align-items:center;gap:3px;margin-top:1px;overflow:hidden;max-width:100%}
+.sk-tag{flex:none;max-width:76px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:9px;line-height:1.5;font-weight:600;padding:0 5px;border-radius:999px;color:var(--sk-cyan,#22d3ee);border:1px solid var(--sk-cyan-border,rgba(34,211,238,.4));background:transparent;opacity:.9}
+.sk-tag-more{color:var(--sk-muted);border-color:var(--sk-border,rgba(255,255,255,.16));font-weight:700}
 .sk-spark{flex:none;display:block}
 .sk-price{width:60px;text-align:right;font-weight:700}
 .sk-chg{width:62px;text-align:right}
@@ -138,6 +141,8 @@ window.__ModuleLoader__.load({
 .sk-add-menu{display:flex;flex-direction:column;gap:6px}
 .sk-add-menu-item{background:var(--sk-hover);border:1px solid var(--sk-border);color:var(--sk-text);border-radius:8px;padding:8px 10px;cursor:pointer;font:inherit;text-align:left}
 .sk-add-menu-item:hover{border-color:var(--sk-cyan-border)}
+/* 窄屏+触摸(手机/平板)隐藏整个盯盘 UI——桌面/触控板设备无论窗口宽窄都显示 */
+@media (max-width: 768px) and (pointer: coarse){.sk-pill,.sk-fan,.sk-fan-item,.sk-panel,.sk-toast{display:none!important}}
 .sk-add-stock{display:flex;flex-direction:column;gap:8px;flex:1;min-height:0}
 .sk-add-input{background:var(--sk-hover);border:1px solid var(--sk-cyan-border);color:var(--sk-text);border-radius:6px;padding:5px 8px;font:inherit;outline:none}
 .sk-rename-input{width:120px;background:var(--sk-hover);border:1px solid var(--sk-cyan-border);color:var(--sk-text);border-radius:6px;padding:1px 6px;font:inherit;outline:none}
@@ -226,6 +231,25 @@ window.__ModuleLoader__.load({
       const b = boardOf(code);
       if (b === "主板") return null; // 与面板一致：主板不标，非主板才挂 chip
       return react.createElement("span", { className: "sk-board-chip sk-board-" + (b === "北交所" ? "bj" : b === "创业板" ? "cy" : "kc"), title: "板块：" + b }, b);
+    }
+
+    /**
+     * 标签 chips（stock-panel DB stocks.groups，只读镜像）。
+     * 行内最多展示 3 个，其余折叠为 +N（title 给全量），避免面板窄时撑高行。
+     */
+    function tagChips(tags) {
+      const list = Array.isArray(tags) ? tags.filter((t) => t && String(t).trim()) : [];
+      if (list.length === 0) return null;
+      const MAX = 3;
+      const shown = list.slice(0, MAX);
+      const rest = list.length - shown.length;
+      const full = "标签：" + list.join(" · ");
+      const kids = shown.map((t, i) =>
+        react.createElement("span", { key: "tg" + i, className: "sk-tag", title: full }, t));
+      if (rest > 0) {
+        kids.push(react.createElement("span", { key: "tg-more", className: "sk-tag sk-tag-more", title: full }, "+" + rest));
+      }
+      return react.createElement("span", { className: "sk-tags" }, kids);
     }
 
     function triggerMeta(t) {
@@ -800,7 +824,10 @@ window.__ModuleLoader__.load({
           const raw = window.localStorage.getItem(POS_KEY);
           if (raw) {
             const p = JSON.parse(raw);
-            if (typeof p.x === "number" && typeof p.y === "number") return p;
+            // 越界自愈：位置若远在视口外（窗口曾更大/换屏残留），忽略并回默认右上角
+            if (typeof p.x === "number" && typeof p.y === "number"
+              && p.x > -200 && p.x < window.innerWidth + 200
+              && p.y > -200 && p.y < window.innerHeight + 200) return p;
           }
         } catch { /* ignore */ }
         return null;
@@ -919,6 +946,18 @@ window.__ModuleLoader__.load({
       const [cfgSource, setCfgSource] = useState("db");
       const targetsRef = useRef(targets);
       useEffect(() => { targetsRef.current = targets; }, [targets]);
+      // 标签覆盖层：/config 的 DB 标签（code → [标签]）。行渲染以服务端 rows 的 tags 为主，
+      // 这里作为兜底（临时盯盘等非 DB 宿主行、旧缓存行）。
+      const tagsRef = useRef({});
+      useEffect(() => {
+        const m = {};
+        for (const g of (groupsCfg || [])) {
+          for (const s of (g.symbols || [])) {
+            if (Array.isArray(s.tags) && s.tags.length > 0) m[s.code] = s.tags;
+          }
+        }
+        tagsRef.current = m;
+      }, [groupsCfg]);
       const refreshCfg = useCallback(async () => {
         try {
           const res = await api("/config");
@@ -1654,7 +1693,14 @@ window.__ModuleLoader__.load({
       dataRef.current = data;
 
       const groups = (data && Array.isArray(data.groups)) ? data.groups : [];
-      const rows = (data && Array.isArray(data.rows)) ? data.rows : [];
+      // 标签兜底：服务端 rows 已带 DB 标签，缺失时（旧缓存/临时盯盘）用 /config 的标签映射补齐。
+      const tagOf = (code) => tagsRef.current[code];
+      const withTags = (r) => {
+        if (Array.isArray(r.tags) && r.tags.length > 0) return r;
+        const t = tagOf(r.code);
+        return t ? { ...r, tags: t } : r;
+      };
+      const rows = ((data && Array.isArray(data.rows)) ? data.rows : []).map(withTags);
       // 组内排序：默认保持后端代码序；chgDesc/chgAsc 按涨跌幅排序，无行情的排最后。
       const sortedRows = (sortMode === "chgDesc" || sortMode === "chgAsc")
         ? rows.slice().sort((a, b) => {
@@ -1671,7 +1717,7 @@ window.__ModuleLoader__.load({
       // 全局信号（跨分组）：买入在前、卖出在后，字段与普通行对齐便于复用渲染
       const signalBuy = (data && data.signal && Array.isArray(data.signal.buy)) ? data.signal.buy : [];
       const signalSell = (data && data.signal && Array.isArray(data.signal.sell)) ? data.signal.sell : [];
-      const signalRows = signalBuy.concat(signalSell);
+      const signalRows = signalBuy.concat(signalSell).map(withTags);
       const signalBuyCount = signalBuy.length;
       const signalSellCount = signalSell.length;
       const themeToggle = react.createElement("button", {
@@ -1944,7 +1990,9 @@ window.__ModuleLoader__.load({
                   react.createElement("span", { className: "sk-name-row" },
                     react.createElement("span", { className: "sk-name-text", style: { color: row.live ? "var(--sk-text)" : FLAT } }, row.name),
                     boardChip(row.code)),
-                  react.createElement("span", { className: "sk-code" }, row.code.replace(/^(sh|sz)/, ""))),
+                  react.createElement("span", { className: "sk-code" },
+                    row.code.replace(/^(sh|sz)/, ""),
+                    tagChips(row.tags))),
                 react.createElement(Sparkline, { prices: row.minutes, color }),
                 react.createElement("span", { className: "sk-price", style: { color } }, row.live ? formatPrice(row.price) : "--"),
                 react.createElement("span", { className: "sk-chg", style: { color } }, row.live ? ((row.changePercent >= 0 ? "+" : "") + row.changePercent.toFixed(2) + "%") : ""),

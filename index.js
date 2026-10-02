@@ -240,10 +240,28 @@ function stripApiCode(code) {
 }
 
 /** 6 位数字 → 带市场前缀（供腾讯接口/药丸内部用） */
-function ensureApiCode(code) {
+function ensureApiCode(code, market) {
   const s = stripApiCode(code);
-  if (/^\d{6}$/.test(s)) return normalizeApiCode(s);
+  if (/^\d{6}$/.test(s)) return normalizeApiCode(s, market);
   return s;
+}
+
+/**
+ * 市场前缀：优先用 DB 的 market 字段（权威），否则按代码段推断。
+ * 推断口径与 stock-panel 面板 data/api_server.py 的 _sdk_code 完全一致：
+ * 6→沪、4/8→北、9→深、5→沪市基金/ETF、15/16/18→深市基金/ETF/LOF、其余（0/3）→深。
+ * 注意 159xxx 是深市 ETF——旧版缺这一段会推成 sh，腾讯接口取不到行情（行无价）。
+ */
+function marketOf(code, market) {
+  const m = String(market || "").trim().toLowerCase();
+  if (m === "sh" || m === "sz" || m === "bj") return m;
+  const c = stripApiCode(code);
+  const d = c[0];
+  if (d === "6" || d === "5") return "sh";
+  if (d === "4" || d === "8") return "bj";
+  if (d === "9") return "sz";
+  if (c.startsWith("15") || c.startsWith("16") || c.startsWith("18")) return "sz";
+  return "sz";
 }
 
 /** 从本地 stock-panel API 拉关注池（DB stocks.active=1），失败/超时返回 null */
@@ -277,7 +295,7 @@ function dbWatchlistToGroups(stocks, buckets) {
   for (const s of stocks) {
     const rawCode = String(s.code || "").trim();
     if (!rawCode) continue;
-    const code = ensureApiCode(rawCode);
+    const code = ensureApiCode(rawCode, s.market); // DB market 字段优先（159xxx 深市 ETF 曾被推成 sh 取不到行情）
     if (seen.has(code)) continue;
     seen.add(code);
     const sym = { code };
@@ -394,11 +412,9 @@ async function loadGroups() {
 // 腾讯财经接口（与 stocking/src/market.ts 同源）
 // ---------------------------------------------------------------------------
 
-function normalizeApiCode(code) {
-  if (code.startsWith("sh") || code.startsWith("sz")) return code;
-  if (/^(60|68|51)/.test(code)) return "sh" + code;
-  if (/^(00|30|39)/.test(code)) return "sz" + code;
-  return "sh" + code;
+function normalizeApiCode(code, market) {
+  if (code.startsWith("sh") || code.startsWith("sz") || code.startsWith("bj")) return code;
+  return marketOf(code, market) + code;
 }
 
 /** 股票池：data/a_stocks.json（全 A 股 {code, name}，惰性加载并缓存；兼容 BOM） */
@@ -419,6 +435,81 @@ async function fetchJson(url) {
   const res = await fetch(url, { signal: AbortSignal.timeout(12000) });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
+}
+
+// ---------------------------------------------------------------------------
+// 腾讯接口熔断（2026-09-16 加）
+// 起因：/quotes 一次请求会为全部分组的每只股票各发一次上游请求（111 只 ≈ 111 发），
+//   前端展开态每 10s 轮询一次。平时没事，但 21:04-21:25 腾讯那两个 A 记录
+//   （117.62.241.183 / 114.222.112.45）集体 i/o timeout 时，失败请求一直挂到
+//   12s 超时，于是每轮都在重发，21 分钟刷出 1968 条同一条 mihomo 日志
+//   （mihomo.log 涨到 804KB，把 check-node.sh 的日志哨兵打醒）。
+// 做法：按上游 host 熔断 —— 连续 BLOCK_FAILS_TO_TRIP 次失败才进入冷却（一次抽风不算），
+//   冷却期内直接返回失败、不再发起上游连接，恢复探测按指数退避（10s→20s→…→60s 封顶），
+//   任意一次成功立刻清零恢复。只碰腾讯这两个接口；其余 fetch 调用不受影响。
+const BLOCK_FAILS_TO_TRIP = 3;      // 连续失败几次才熔断
+const BLOCK_COOLDOWN_MS = 10000;    // 基础冷却 10s（前端轮询间隔就是 10s）
+const BLOCK_COOLDOWN_MAX_MS = 60000; // 指数退避封顶 60s
+const upstreamCircuit = new Map();  // host -> { fails, openUntil, cooldown, skipped, lastLog }
+
+function upstreamHostOf(url) {
+  try { return new URL(url).host; } catch { return String(url); }
+}
+
+function circuitOf(host) {
+  let c = upstreamCircuit.get(host);
+  if (!c) {
+    c = { fails: 0, openUntil: 0, cooldown: BLOCK_COOLDOWN_MS, skipped: 0, lastLog: 0 };
+    upstreamCircuit.set(host, c);
+  }
+  return c;
+}
+
+/** 熔断期间直接返回失败（调用方已有 catch 兜底），不发起上游连接 */
+function upstreamBlocked(url) {
+  const host = upstreamHostOf(url);
+  const c = circuitOf(host);
+  if (!(c.openUntil > Date.now())) return false;
+  c.skipped += 1;
+  // 每冷却窗口最多留一条日志，便于判断「是 upstream 挂了，不是插件挂了」
+  if (Date.now() - c.lastLog >= c.cooldown) {
+    c.lastLog = Date.now();
+    console.error(
+      `[dsh-stock-watch] ${host} 熔断中(${c.cooldown / 1000}s)，本窗口已跳过 ${c.skipped} 次上游请求`
+    );
+  }
+  return true;
+}
+
+function upstreamOk(url) {
+  const c = circuitOf(upstreamHostOf(url));
+  if (c.fails || c.openUntil || c.skipped) {
+    console.error(`[dsh-stock-watch] ${upstreamHostOf(url)} 已恢复（跳过 ${c.skipped} 次）`);
+  }
+  c.fails = 0; c.openUntil = 0; c.cooldown = BLOCK_COOLDOWN_MS; c.skipped = 0;
+}
+
+function upstreamFail(url) {
+  const c = circuitOf(upstreamHostOf(url));
+  c.fails += 1;
+  if (c.fails < BLOCK_FAILS_TO_TRIP) return;
+  const wasOpen = c.openUntil > Date.now();
+  if (wasOpen) c.cooldown = Math.min(c.cooldown * 2, BLOCK_COOLDOWN_MAX_MS);
+  c.openUntil = Date.now() + c.cooldown;
+  c.skipped = 0;
+}
+
+/** 带熔断的腾讯接口请求 */
+async function fetchJsonTencent(url) {
+  if (upstreamBlocked(url)) throw new Error(`upstream circuit open: ${upstreamHostOf(url)}`);
+  try {
+    const json = await fetchJson(url);
+    upstreamOk(url);
+    return json;
+  } catch (e) {
+    upstreamFail(url);
+    throw e;
+  }
 }
 
 /** 解析单只股票的分钟接口响应（快照 + 可选分时价格） */
@@ -462,7 +553,7 @@ function parseMinuteJson(code, json, includeMinutes) {
 
 async function fetchQuoteResult(symbol, includeMinutes) {
   try {
-    const json = await fetchJson(MINUTE_API.replace("{code}", normalizeApiCode(symbol.code)));
+    const json = await fetchJsonTencent(MINUTE_API.replace("{code}", normalizeApiCode(symbol.code)));
     return parseMinuteJson(symbol.code, json, includeMinutes);
   } catch {
     return { quote: null, prices: [] };
@@ -481,7 +572,7 @@ async function fetchKline(code, period, refPrice) {
   const count = period === "day" ? "160" : "120";
   const url = KLINE_API.replace("{code}", apiCode).replace("{period}", period).replace("{count}", count);
   try {
-    const json = await fetchJson(url);
+    const json = await fetchJsonTencent(url);
     if (!json || json.code !== 0) return { candles: [], error: "接口返回异常" };
     const sd = json.data && json.data[apiCode];
     if (!sd) return { candles: [], error: "无K线数据" };
@@ -528,7 +619,7 @@ async function fetchKline(code, period, refPrice) {
 async function fetchMinuteDetail(code) {
   const apiCode = normalizeApiCode(code);
   try {
-    const json = await fetchJson(MINUTE_API.replace("{code}", apiCode));
+    const json = await fetchJsonTencent(MINUTE_API.replace("{code}", apiCode));
     if (!json || json.code !== 0) return { date: null, prevClose: null, points: [], error: "接口返回异常" };
     const sd = json.data && json.data[apiCode];
     if (!sd || !sd.data) return { date: null, prevClose: null, points: [], error: "无分时数据" };
@@ -736,10 +827,20 @@ function apply(ctx) {
       const groupIndex = parseInt(q.get("group") ?? "0", 10) || 0;
       const includeMinutes = q.get("minutes") === "1";
       let loaded;
-      const groupsParam = q.get("groups");
-      if (groupsParam) {
+      // 分组配置走 POST body：关注池 111 只带标签后 query 串会超过 Node maxHeaderSize(16KB) → 431。
+      // 旧 GET ?groups= 保留兼容（无 body 时回退）。
+      let groupsPayload = null;
+      if (String(req.method || "GET").toUpperCase() === "POST") {
+        const body = await readBody(req);
+        if (body && body.groups !== undefined) groupsPayload = body.groups;
+      }
+      const groupsParam = groupsPayload !== null && groupsPayload !== undefined
+        ? groupsPayload
+        : q.get("groups");
+      if (groupsParam !== null && groupsParam !== undefined) {
         try {
-          const clientGroups = normalizeClientGroups(JSON.parse(groupsParam));
+          const raw = typeof groupsParam === "string" ? JSON.parse(groupsParam) : groupsParam;
+          const clientGroups = normalizeClientGroups(raw);
           loaded = clientGroups ? { groups: clientGroups, source: "local", path: null } : await loadGroups();
         } catch {
           loaded = await loadGroups();

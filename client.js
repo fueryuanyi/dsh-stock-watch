@@ -198,7 +198,18 @@ window.__ModuleLoader__.load({
     }
 
     // ------------------------------------------------------------------ 工具
-    async function api(path, params) {
+    /**
+     * 插件路由请求。params 默认拼 query；options.body 时改发 POST JSON
+     * （分组配置含标签后 query 串会超 Node maxHeaderSize → 431，故 /quotes 走 body）。
+     */
+    async function api(path, params, options) {
+      const opts = options || {};
+      const init = { cache: "no-store", method: opts.body ? "POST" : "GET" };
+      let url = BASE + path;
+      if (opts.body) {
+        init.headers = { "content-type": "application/json" };
+        init.body = JSON.stringify(opts.body);
+      }
       const qs = new URLSearchParams();
       if (params) {
         for (const [k, v] of Object.entries(params)) {
@@ -207,7 +218,8 @@ window.__ModuleLoader__.load({
         }
       }
       const q = qs.toString();
-      const res = await fetch(BASE + path + (q ? "?" + q : ""), { cache: "no-store" });
+      if (q) url += "?" + q;
+      const res = await fetch(url, init);
       if (!res.ok) throw new Error("HTTP " + res.status);
       return res.json();
     }
@@ -995,7 +1007,11 @@ window.__ModuleLoader__.load({
       const load = useCallback(async (includeMinutes) => {
         if (!groupsCfg || groupsCfg.length === 0) return;
         try {
-          const res = await api("/quotes", { group: groupIndex, minutes: includeMinutes ? 1 : 0, groups: groupsCfg });
+          const res = await api(
+            "/quotes",
+            { group: groupIndex, minutes: includeMinutes ? 1 : 0 },
+            { body: { groups: groupsCfg } },
+          );
           setData(res);
           setError(null);
         } catch {

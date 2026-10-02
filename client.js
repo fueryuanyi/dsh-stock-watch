@@ -49,6 +49,12 @@ window.__ModuleLoader__.load({
 .sk-panel{position:fixed;top:14px;right:16px;z-index:1000002;width:400px;max-height:78vh;display:flex;flex-direction:column;border-radius:12px;overflow:hidden;background:var(--sk-panel-bg);border:1px solid var(--sk-border);color:var(--sk-text);box-shadow:var(--sk-shadow);backdrop-filter:blur(10px);font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,'Courier New',monospace;pointer-events:auto}
 .sk-header{display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--sk-border-soft)}
 .sk-title{font-weight:700;color:var(--sk-cyan);white-space:nowrap}
+.sk-macro-note{padding:18px 14px;text-align:center;color:var(--sk-muted);font-size:11px;line-height:1.9}
+.sk-macro-big{font-size:26px;font-weight:700;color:var(--sk-text);font-variant-numeric:tabular-nums}
+.sk-macro-unit{font-size:11px;font-weight:400;color:var(--sk-muted);margin-left:6px}
+.sk-macro-chg{font-size:13px;font-weight:600;margin-bottom:12px}
+.sk-macro-line{margin-top:4px}
+.sk-macro-line code{background:rgba(148,163,184,.16);padding:1px 4px;border-radius:3px}
 .sk-tabs{display:flex;gap:4px;flex:1;min-width:0;overflow-x:auto;scrollbar-width:none}
 .sk-tabs::-webkit-scrollbar{display:none}
 .sk-tab{flex:none;padding:2px 9px;border-radius:999px;border:1px solid transparent;background:transparent;color:var(--sk-muted);cursor:pointer;font:inherit;white-space:nowrap}
@@ -1403,6 +1409,11 @@ window.__ModuleLoader__.load({
       // 详情视图：进入 / 切周期 / 每 10s 刷新
       useEffect(() => {
         if (!expanded || !view || !view.code) return undefined;
+        // 宏观标的不发腾讯请求（见上面 isMacro 的说明）—— 只是不拉图，
+        // 价格仍由外层 10s 的 /quotes 轮询刷新
+        const d = dataRef.current;
+        const r = (d && Array.isArray(d.rows)) ? d.rows.find((x) => x.code === view.code) : null;
+        if (r && r.macro) return undefined;
         loadDetail(view.code, period);
         const id = setInterval(() => loadDetail(view.code, period), 10000);
         return () => clearInterval(id);
@@ -1849,6 +1860,10 @@ window.__ModuleLoader__.load({
       if (view && view.code) {
         const row = rows.find((r) => r.code === view.code);
         const isMinute = period === "minute";
+        // 宏观标的（🌍 宏观 分组）不是股票：没有腾讯分时/K线可拉。
+        // 这里给一块说明而不是让它去请求（请求只会等到超时，然后显示「获取失败」，
+        // 看着像插件坏了）。
+        const isMacro = !!(row && row.macro);
         const m = (isMinute && minute && minute.code === view.code) ? minute : null;
         const k = (!isMinute && kline && kline.code === view.code && kline.period === period) ? kline : null;
         const candles = k && Array.isArray(k.candles) ? k.candles : [];
@@ -1856,14 +1871,31 @@ window.__ModuleLoader__.load({
         const color = row && row.live ? (isUp ? UP : DOWN) : FLAT;
         const trig = row ? triggerMeta(row.trigger) : null;
         const dark = theme === "dark";
-        const chartEl = isMinute
+        const macroEl = react.createElement("div", { className: "sk-macro-note" },
+          react.createElement("div", { className: "sk-macro-big" }, row && row.live ? formatPrice(row.price) : "--",
+            react.createElement("span", { className: "sk-macro-unit" }, row && row.unit ? row.unit : "")),
+          react.createElement("div", { className: "sk-macro-chg", style: { color } },
+            row && row.live && typeof row.changePercent === "number"
+              ? ((row.changePercent >= 0 ? "+" : "") + row.changePercent.toFixed(2) + "%") : ""),
+          react.createElement("div", { className: "sk-macro-line" },
+            "数据来自 stock-panel ",
+            react.createElement("code", null, "/api/macro"),
+            "（多源降级 + 合成口径）；这里不做分时/K线。"),
+          row && row.stateNote
+            ? react.createElement("div", { className: "sk-macro-line" }, "⚠ " + row.stateNote)
+            : null,
+          react.createElement("div", { className: "sk-macro-line" },
+            "趋势图请看面板 🌍 宏观 tab，或手机页 /m 的「🌍 宏观」。"));
+        const chartEl = isMacro ? macroEl : (isMinute
           ? (lwc
               ? react.createElement(MinuteChart, { lwc, points: m && Array.isArray(m.points) ? m.points : [], prevClose: m ? m.prevClose : null, height: 240, dark, fitKey: view.code + ":minute", fill: !!size })
               : react.createElement(SvgMinute, { points: m && Array.isArray(m.points) ? m.points : [], prevClose: m ? m.prevClose : null, width: 380, height: 228, dark, fill: !!size }))
           : (lwc
               ? react.createElement(LwcChart, { lwc, candles, height: 240, dark, fitKey: view.code + ":" + period, maVisible, fill: !!size, chartApiRef: klineChartApiRef })
-              : react.createElement(SvgCandles, { candles, width: 380, height: 228, fill: !!size }));
-        const footText = isMinute
+              : react.createElement(SvgCandles, { candles, width: 380, height: 228, fill: !!size })));
+        const footText = isMacro
+          ? ((row && row.stateNote) ? row.stateNote : "宏观标的 · 无分时/K线")
+          : isMinute
           ? (m === null ? "分时加载中…" : (m && m.error ? "分时：" + m.error : (m && Array.isArray(m.points) ? m.points.length + " 个分时点" : "")))
           : (k === null ? "K线加载中…" : (k && k.error ? "K线：" + k.error : (candles.length + " 根K线")));
         const targetChip = (type) => {
@@ -1910,14 +1942,14 @@ window.__ModuleLoader__.load({
               trig ? react.createElement("span", { className: "sk-detail-trigger", style: { color: trig.c, borderColor: trig.c } }, trig.t) : null),
             react.createElement("div", { className: "sk-detail-targets" }, targetChip("buy"), targetChip("sell")),
             flashMsg ? react.createElement("div", { className: "sk-flash", style: { color: flashMsg.color } }, flashMsg.text) : null,
-            react.createElement("div", { className: "sk-periods" },
+            !isMacro && react.createElement("div", { className: "sk-periods" },
               ["minute", "day", "week", "month"].map((p) =>
                 react.createElement("button", {
                   key: p,
                   className: "sk-period" + (p === period ? " sk-period-active" : ""),
                   onClick: () => setPeriod(p),
                 }, p === "minute" ? "分时" : p === "day" ? "日K" : p === "week" ? "周K" : "月K")))),
-            !isMinute && react.createElement("div", { className: "sk-ma-row" },
+            !isMinute && !isMacro && react.createElement("div", { className: "sk-ma-row" },
               react.createElement("span", { className: "sk-zoom" },
                 react.createElement("button", { className: "sk-zoom-btn", title: "缩小K线", onClick: () => zoomKline(1 / 1.35) }, "−"),
                 react.createElement("button", { className: "sk-zoom-btn", title: "放大K线", onClick: () => zoomKline(1.35) }, "+"),
@@ -2000,12 +2032,17 @@ window.__ModuleLoader__.load({
               const isUp = row.live && row.changePercent >= 0;
               const color = row.live ? (isUp ? UP : DOWN) : FLAT;
               const trig = triggerMeta(row.trigger);
-              const tip = "高 " + (row.live ? formatPrice(row.high) : "-") + " · 低 " + (row.live ? formatPrice(row.low) : "-") + " · 量 " + (row.live ? row.volume : "-");
+              const tip = row.macro
+                ? ("高 " + (row.live ? formatPrice(row.high) : "-")
+                   + " · 低 " + (row.live ? formatPrice(row.low) : "-")
+                   + (row.unit ? " · 单位 " + row.unit : "")
+                   + (row.stateNote ? " · " + row.stateNote : ""))
+                : ("高 " + (row.live ? formatPrice(row.high) : "-") + " · 低 " + (row.live ? formatPrice(row.low) : "-") + " · 量 " + (row.live ? row.volume : "-"));
               return react.createElement("div", { key: row.code, className: "sk-row", onClick: () => setView({ code: row.code }), title: tip },
                 react.createElement("span", { className: "sk-name" },
                   react.createElement("span", { className: "sk-name-row" },
                     react.createElement("span", { className: "sk-name-text", style: { color: row.live ? "var(--sk-text)" : FLAT } }, row.name),
-                    boardChip(row.code)),
+                    row.macro ? null : boardChip(row.code)),
                   react.createElement("span", { className: "sk-code" },
                     row.code.replace(/^(sh|sz)/, ""),
                     tagChips(row.tags))),

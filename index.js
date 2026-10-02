@@ -365,11 +365,23 @@ async function loadDbGroups() {
   return dbGroupsCache;
 }
 
+/** 把宏观虚拟分组挂到最后。**每个出口都要过这一道** —— 漏掉任何一个，
+ *  DB 挂掉降级读文件时宏观 tab 就会凭空消失（那种"有时有有时没有"最难查）。 */
+function withMacroGroup(groups) {
+  const g = (groups || []).filter((x) => x && x.name !== MACRO_GROUP_NAME);
+  const macro = {
+    name: MACRO_GROUP_NAME,
+    virtual: "macro",
+    symbols: [...MACRO_CODES].map((code) => ({ code })),
+  };
+  return [...g, macro];
+}
+
 async function loadGroups() {
   // 优先 DB：即使关注池为空也以 DB 为准（避免显示旧配置/默认分组的误导）
   const dbGroups = await loadDbGroups();
   if (dbGroups !== null) {
-    return { groups: dbGroups, source: "db", path: dbApiBase(), dbDown: false };
+    return { groups: withMacroGroup(dbGroups), source: "db", path: dbApiBase(), dbDown: false };
   }
   // DB 不可用（8888 没起 / 超时）→ 降级 ~/.stocking/settings.json（旧行为）
   const path = join(homedir(), ".stocking", "settings.json");
@@ -401,11 +413,60 @@ async function loadGroups() {
       }
       groups.push(group);
     }
-    if (groups.length > 0) return { groups, source: "file", path, dbDown: true };
+    if (groups.length > 0) return { groups: withMacroGroup(groups), source: "file", path, dbDown: true };
   } catch {
     /* 读取/解析失败 → 兜底默认分组 */
   }
-  return { groups: DEFAULT_GROUPS, source: "default", path: null, dbDown: true };
+  return { groups: withMacroGroup(DEFAULT_GROUPS), source: "default", path: null, dbDown: true };
+}
+
+// ---------------------------------------------------------------------------
+// 🌍 宏观分组（2026-10-02 加）
+//
+// 9 个宏观标的（现货金银 / WTI·布伦特 / 美元指数 / 美元日元 / 美元人民币 /
+// 上证指数 / 人民币账户黄金）不是股票，数据来自 **stock-panel 的 /api/macro**
+// （那里已经做完了多源降级、状态判定与合成口径），不走腾讯行情。
+//
+// 做成**虚拟分组**，与「临时盯盘」同一个套路：始终挂在最后、不入 DB buckets、
+// 不可删不可改名 —— 它是插件自己的能力，不是你维护的关注分组。
+const MACRO_GROUP_NAME = "🌍 宏观";
+// symbol 带命名空间（XAU / IDX.SSEC / …），与 6 位股票代码天然不撞
+const MACRO_CODES = new Set([
+  "USDJPY", "OIL", "IDX.SSEC", "USDCNY", "CNYGOLD", "CL", "DXY", "XAG", "XAU",
+]);
+function isMacroCode(code) {
+  return MACRO_CODES.has(String(code || "").trim());
+}
+
+/** 拉宏观快照。返回 {code: {name, price, changePercent, high, low, unit, state, note}} */
+async function fetchMacroQuotes() {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 12000);
+  try {
+    const res = await fetch(`${dbApiBase()}/api/macro`, { signal: ctrl.signal });
+    if (!res.ok) return null;
+    const json = await res.json();
+    const items = (json && json.items) || [];
+    const out = new Map();
+    for (const it of items) {
+      out.set(it.id, {
+        name: it.name,
+        price: it.price,
+        changePercent: it.pct,
+        high: it.high,
+        low: it.low,
+        unit: it.unit,
+        state: it.state,          // live / stale / halted
+        stateNote: it.stateNote,  // 为什么非实时（源固有延迟 / 已收盘 / 久无更新）
+        src: it.src,
+      });
+    }
+    return out;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -841,7 +902,9 @@ function apply(ctx) {
         try {
           const raw = typeof groupsParam === "string" ? JSON.parse(groupsParam) : groupsParam;
           const clientGroups = normalizeClientGroups(raw);
-          loaded = clientGroups ? { groups: clientGroups, source: "local", path: null } : await loadGroups();
+          loaded = clientGroups
+            ? { groups: withMacroGroup(clientGroups), source: "local", path: null }
+            : await loadGroups();
         } catch {
           loaded = await loadGroups();
         }
@@ -864,13 +927,34 @@ function apply(ctx) {
       }
       const curCodes = new Set((curGroup ? curGroup.symbols : []).map((s) => s.code));
 
-      // 并发拉全部行情（当前分组的按需带分钟数据，其余只取快照算信号）
+      // 并发拉全部行情（当前分组的按需带分钟数据，其余只取快照算信号）。
+      // 宏观标的**不发腾讯请求** —— 它们不是股票，code 形如 XAU/IDX.SSEC，
+      // 发过去只会白等超时；改从 /api/macro 一次性取快照（9 个一次请求）。
+      const macroSymbols = allSymbols.filter((s) => isMacroCode(s.code));
+      const stockSymbols = allSymbols.filter((s) => !isMacroCode(s.code));
+      const macroQuotes = macroSymbols.length > 0 ? await fetchMacroQuotes() : null;
+
       const allResults = await Promise.all(
-        allSymbols.map((s) => fetchQuoteResult(s, includeMinutes && curCodes.has(s.code)))
+        stockSymbols.map((s) => fetchQuoteResult(s, includeMinutes && curCodes.has(s.code)))
       );
       const byCode = new Map();
-      for (let i = 0; i < allSymbols.length; i++) {
-        byCode.set(allSymbols[i].code, allResults[i] ?? { quote: null, prices: [] });
+      stockSymbols.forEach((s, i) => {
+        byCode.set(s.code, allResults[i] ?? { quote: null, prices: [] });
+      });
+      for (const s of macroSymbols) {
+        const q2 = macroQuotes ? macroQuotes.get(s.code) : null;
+        byCode.set(s.code, {
+          quote: q2
+            ? {
+                name: q2.name, price: q2.price, changePercent: q2.changePercent,
+                changeAmount: (q2.price != null && q2.changePercent != null)
+                  ? q2.price - q2.price / (1 + q2.changePercent / 100) : null,
+                high: q2.high, low: q2.low, volume: null, amount: null,
+                unit: q2.unit, state: q2.state, stateNote: q2.stateNote, src: q2.src,
+              }
+            : null,
+          prices: [],
+        });
       }
 
       const makeRow = (sym, parsed) => {
@@ -895,6 +979,16 @@ function apply(ctx) {
           row.amount = q2.amount;
           row.trigger = computeTrigger(q2.price, sym.buyPrice, sym.sellPrice);
           if (parsed.prices && parsed.prices.length > 0) row.minutes = parsed.prices;
+          // 宏观行的额外信息：前端据此**不做分时/K线**（那些走腾讯，宏观没有），
+          // 并把「为什么非实时」显示出来（与 stock-panel 手机页同一口径）
+          if (isMacroCode(sym.code)) {
+            row.macro = true;
+            row.unit = q2.unit || "";
+            row.state = q2.state || "";
+            row.stateNote = q2.stateNote || "";
+          }
+        } else if (isMacroCode(sym.code)) {
+          row.macro = true;      // 连快照都没取到也要标记，否则点开还是会去要腾讯分时
         }
         return row;
       };

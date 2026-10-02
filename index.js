@@ -437,11 +437,22 @@ const MACRO_CODES = new Set([
 function isMacroCode(code) {
   return MACRO_CODES.has(String(code || "").trim());
 }
+// 显示名的**兜底**。权威名字在 stock-panel 的 /api/macro（config/macro.yaml 是源头），
+// 但那一趟要打 9 个实时源、实测 8.9 秒（冷启动更久）—— 取数失败时若把名字退化成代码，
+// tab 里就是 9 行 USDJPY/IDX.SSEC，看不懂。所以这里留一份镜像，只在取不到时用。
+// 与 marketOf 对 _sdk_code 的做法同款：**镜像 + 注释指向源头**，不是第二事实来源。
+const MACRO_NAMES = {
+  USDJPY: "美元/日元", OIL: "布伦特原油", "IDX.SSEC": "上证指数",
+  USDCNY: "美元/人民币", CNYGOLD: "人民币账户黄金", CL: "WTI原油",
+  DXY: "美元指数", XAG: "现货白银", XAU: "现货黄金",
+};
 
 /** 拉宏观快照。返回 {code: {name, price, changePercent, high, low, unit, state, note}} */
 async function fetchMacroQuotes() {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 12000);
+  // 上限 25s：实测 /api/macro 一趟 8.9s（它要打 9 个实时源），冷启动或东财重试时更久。
+  // 原来给 12s，结果第一次轮询被掐断 → 9 行全退化成代码（2026-10-02 实测踩到）。
+  const timer = setTimeout(() => ctrl.abort(), 25000);
   try {
     const res = await fetch(`${dbApiBase()}/api/macro`, { signal: ctrl.signal });
     if (!res.ok) return null;
@@ -988,7 +999,10 @@ function apply(ctx) {
             row.stateNote = q2.stateNote || "";
           }
         } else if (isMacroCode(sym.code)) {
-          row.macro = true;      // 连快照都没取到也要标记，否则点开还是会去要腾讯分时
+          // 连快照都没取到：标记 macro（否则点开还会去要腾讯分时）+ 用兜底**名字**
+          // （不能退化成代码），live 保持 false —— 不给假价
+          row.macro = true;
+          row.name = MACRO_NAMES[sym.code] || sym.code;
         }
         return row;
       };

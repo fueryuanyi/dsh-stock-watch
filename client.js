@@ -70,6 +70,8 @@ window.__ModuleLoader__.load({
 .sk-resize:hover{opacity:1}
 .sk-resize-br{bottom:0;right:0;cursor:nwse-resize;border-bottom-right-radius:10px;background:linear-gradient(315deg,transparent 62%,var(--sk-muted) 62%,var(--sk-muted) 75%,transparent 75%)}
 .sk-del:hover{color:#ff5555;background:var(--sk-hover)}
+/* 宏观行只留占位（保持右侧对齐），不可点也不该看起来可点 */
+.sk-del-macro{pointer-events:none;cursor:default}
 .sk-right{display:flex;align-items:center;gap:4px;flex:none}
 .sk-countdown{color:var(--sk-muted);white-space:nowrap}
 .sk-icon{background:transparent;border:none;color:var(--sk-muted);cursor:pointer;font-size:13px;padding:2px 6px;border-radius:6px;font-family:inherit}
@@ -2052,11 +2054,15 @@ window.__ModuleLoader__.load({
                 trig
                   ? react.createElement("span", { className: "sk-trigger", style: { color: trig.c, borderColor: trig.c } }, trig.t)
                   : react.createElement("span", { className: "sk-trigger sk-trigger-none" }, "-"),
-                react.createElement("button", {
-                  className: "sk-del",
-                  title: "从列表删除 " + row.name,
-                  onClick: (e) => { e.stopPropagation(); removeStock(row.code, row.name); },
-                }, "✕"));
+                // 宏观分组是虚拟分组（不入 DB buckets，不可删不可改名），
+                // 所以它的行不给「删除」—— 点了也只能是空操作，不如不给
+                row.macro
+                  ? react.createElement("span", { className: "sk-del sk-del-macro", title: "宏观标的（内置分组，不可删除）" }, "")
+                  : react.createElement("button", {
+                      className: "sk-del",
+                      title: "从列表删除 " + row.name,
+                      onClick: (e) => { e.stopPropagation(); removeStock(row.code, row.name); },
+                    }, "✕"));
             }));
 
       const footer = react.createElement("div", { className: "sk-footer" },

@@ -368,11 +368,25 @@ async function loadDbGroups() {
 /** 把宏观虚拟分组挂到最后。**每个出口都要过这一道** —— 漏掉任何一个，
  *  DB 挂掉降级读文件时宏观 tab 就会凭空消失（那种"有时有有时没有"最难查）。 */
 function withMacroGroup(groups) {
+  // 调用方带来的宏观 symbol 要**保留其字段**（buyPrice/sellPrice 是目标价合并进来的）。
+  // 早先这里无条件重建成 { code }，等于把宏观目标价整个丢掉 ——
+  // 表现是「在 /m 给金价设了目标价，药丸的 ⚡ 信号 永远不亮」（行上还看得见值，
+  // 因为那是客户端 targets 状态直接渲染的，所以更难发现）。
+  const incoming = (groups || []).find((x) => x && x.name === MACRO_GROUP_NAME);
+  const byCode = new Map();
+  if (incoming && Array.isArray(incoming.symbols)) {
+    for (const sym of incoming.symbols) {
+      if (sym && typeof sym.code === "string") byCode.set(sym.code, sym);
+    }
+  }
   const g = (groups || []).filter((x) => x && x.name !== MACRO_GROUP_NAME);
   const macro = {
     name: MACRO_GROUP_NAME,
     virtual: "macro",
-    symbols: [...MACRO_CODES].map((code) => ({ code })),
+    symbols: [...MACRO_CODES].map((code) => {
+      const inc = byCode.get(code);
+      return inc ? { ...inc, code } : { code };
+    }),
   };
   return [...g, macro];
 }
@@ -469,6 +483,7 @@ async function fetchMacroQuotes() {
         unit: it.unit,
         state: it.state,          // live / stale / halted
         stateNote: it.stateNote,  // 为什么非实时（源固有延迟 / 已收盘 / 久无更新）
+        note: it.note,            // 口径提醒（合约月 / 离岸在岸 / 折算口径）
         src: it.src,
       });
     }
@@ -874,6 +889,93 @@ function apply(ctx) {
     }
   });
 
+  // 目标价读写代理：药丸里设/清买卖目标价直写本地 DB（stock_targets 表，唯一真理源）。
+  // **这是 C 方案的最后一块**：此前目标价是药丸里唯一的 localStorage 私货层，
+  // 结果是「在面板/手机页设的目标价药丸看不见，在药丸设的又不会推 Bark」——
+  // 两边都以为自己是全部。分组与关注池早已改成直写 DB，目标价也照同一套路收口。
+  //
+  // GET  /dsh-stock-watch/targets                      → 全量目标价（含宏观 code）
+  // POST /dsh-stock-watch/targets {code,buy_target,sell_target}  → 写/清（两侧皆空即删行）
+  // POST /dsh-stock-watch/targets {code,rearm:"buy"|"sell"|"both"} → 重新武装（清达成标记）
+  register("/dsh-stock-watch/targets", async (req, res) => {
+    const method = (req.method || "GET").toUpperCase();
+
+    if (method === "GET") {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), DB_API_TIMEOUT);
+      try {
+        const r = await fetch(`${dbApiBase()}/api/targets`, { signal: ctrl.signal });
+        const json = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          sendJson(res, 502, { ok: false, error: `本地 API 返回 ${r.status}` });
+          return;
+        }
+        sendJson(res, 200, { ok: true, targets: (json && json.targets) || {} });
+      } catch {
+        sendJson(res, 502, { ok: false, error: `本地 API 不可用（${dbApiBase()}）` });
+      } finally {
+        clearTimeout(timer);
+      }
+      return;
+    }
+
+    if (method !== "POST") {
+      sendJson(res, 405, { ok: false, error: "只支持 GET / POST" });
+      return;
+    }
+
+    const body = await readBody(req);
+    // 宏观 code 不是 6 位数字（XAU / IDX.SSEC / …），所以这里只去市场前缀、不校验数字位数；
+    // 合法性交给 stock-panel 的 set_target（它自己有 is_macro_code 分流）。
+    const code = String(body.code || "").trim().replace(/^(sh|sz|bj)/i, "");
+    if (!code) {
+      sendJson(res, 400, { ok: false, error: "缺少 code" });
+      return;
+    }
+
+    let path = "/api/target";
+    let payload = { code };
+    if (body.rearm !== undefined) {
+      const kind = String(body.rearm || "");
+      if (kind !== "buy" && kind !== "sell" && kind !== "both") {
+        sendJson(res, 400, { ok: false, error: 'rearm 必须为 "buy" | "sell" | "both"' });
+        return;
+      }
+      path = "/api/target/rearm";
+      payload = { code, kind: kind === "both" ? "" : kind };
+    } else {
+      // 只转发**出现**的键：undefined 与 null 语义不同（null = 清除该项）
+      if ("buy_target" in body) payload.buy_target = body.buy_target;
+      if ("sell_target" in body) payload.sell_target = body.sell_target;
+      if (!("buy_target" in payload) && !("sell_target" in payload)) {
+        sendJson(res, 400, { ok: false, error: "没有任何可更新的字段" });
+        return;
+      }
+    }
+
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), DB_API_TIMEOUT);
+    try {
+      const r = await fetch(`${dbApiBase()}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: ctrl.signal,
+      });
+      const json = await r.json().catch(() => ({}));
+      if (!r.ok || json.ok !== true) {
+        sendJson(res, 502, { ok: false, error: (json && json.error) || `本地 API 返回 ${r.status}` });
+        return;
+      }
+      // set_target 返回写入后的行（删干净了返回 {}）；rearm 返回全量里的该 code
+      sendJson(res, 200, { ok: true, code, target: json.target || {} });
+    } catch {
+      sendJson(res, 502, { ok: false, error: `本地 API 不可用（${dbApiBase()}，请先启动 stock-panel 面板服务）` });
+    } finally {
+      clearTimeout(timer);
+    }
+  });
+
   // 添加股票搜索：按代码或名称匹配全 A 股池，返回带市场前缀的代码
   register("/dsh-stock-watch/stocks", async (req, res) => {
     const needle = (queryOf(req).get("q") ?? "").trim();
@@ -962,6 +1064,7 @@ function apply(ctx) {
                   ? q2.price - q2.price / (1 + q2.changePercent / 100) : null,
                 high: q2.high, low: q2.low, volume: null, amount: null,
                 unit: q2.unit, state: q2.state, stateNote: q2.stateNote, src: q2.src,
+                note: q2.note,
               }
             : null,
           prices: [],
@@ -997,6 +1100,7 @@ function apply(ctx) {
             row.unit = q2.unit || "";
             row.state = q2.state || "";
             row.stateNote = q2.stateNote || "";
+            row.note = q2.note || "";
           }
         } else if (isMacroCode(sym.code)) {
           // 连快照都没取到：标记 macro（否则点开还会去要腾讯分时）+ 用兜底**名字**

@@ -126,14 +126,15 @@ dsh plugin --profile web add dsh-stock-watch
 这是 stock-panel 那套状态口径（`live`/`stale`/`halted`）在药丸里的镜像，详见
 `stock-panel/docs/宏观看板-方案.md` §4.4b。
 
-**两处已知取舍**：
-1. 显示名有一份**兜底镜像**（`MACRO_NAMES`）。权威名字在 `/api/macro`
-   （`config/macro.yaml` 是源头），但那一趟实测 8.9 秒、冷启动更久，
-   取不到时若把名字退化成 `USDJPY` 这种代码就看不懂了。兜底只在取数失败时用，
-   且此时 `live=false`（不给假价）。
-2. 宏观的买/卖点仍存**浏览器 localStorage**（与其它标的一致）；
-   而 **Bark 到价提醒**走 stock-panel 的 `stock_targets` 表（`sp5 target check`）。
-   两套并存是既有分工，本次没动 —— 见下方「目标价」一节。
+**口径提醒也印出来**：两个原油（当月连续合约、与金十可能差一个跨月价差）、
+离岸人民币、折算黄金这 4 个标的，快照里的 `note` 会显示在宏观说明块里（`ⓘ …`），
+排在「数据从哪来」前面 —— 它解释的是**数字本身怎么读**。
+内容是 stock-panel 的 `config/macro.yaml` 给的，插件不自己造一份。
+
+**一处已知取舍**：显示名有一份**兜底镜像**（`MACRO_NAMES`）。权威名字在 `/api/macro`
+（`config/macro.yaml` 是源头），但那一趟实测 8.9 秒、冷启动更久，
+取不到时若把名字退化成 `USDJPY` 这种代码就看不懂了。兜底只在取数失败时用，
+且此时 `live=false`（不给假价）。
 
 ## 目录结构
 
@@ -160,11 +161,48 @@ dsh-stock-watch/
 | 列表 | 分组 tab 切换 · 点击行进详情 · ⟳ 手动刷新 · — 折叠 · ☀️/🌙 切主题 |
 | 详情 | ← 返回 · 分时 / 日K / 周K / 月K 切换 · 📈 投资研究报告（新建对话一键分析）· 点击买入/卖出目标编辑 · K线 `+`/`−`/`重置` 缩放 |
 
+## 🎯 目标价：stock_targets 是唯一真理源（2026-10-02 收口）
+
+药丸里的买/卖目标价**直写 stock-panel 的 `stock_targets` 表**，与关注池、分组同一套路
+（都经 host 代理直写 DB，不在 localStorage 留第二份真相）。
+
+之前不是"两套分工"，是**两边互盲**：
+- `/api/watchlist` 不带目标价 → 面板/手机页/CLI 设的目标价，**药丸一直看不见**；
+- 药丸里设的只进 localStorage → **不进 DB，Bark 永远不会推**，`/m` 也看不见；
+- 更糟的是本地覆盖层会**静默遮盖** DB —— 在手机页改过目标价，药丸里却永远显示旧值。
+
+现在：
+- 新增 `/dsh-stock-watch/targets`：`GET` 全量（含宏观 code，9 个一次回来）、
+  `POST {code,buy_target,sell_target}` 写入/清除、`POST {code,rearm}` 重新武装；
+  直通 stock-panel 的 `/api/target` 与 `/api/target/rearm`。
+- 客户端挂载后拉一次，随 `/config` 一起 60s 刷新；编辑走**乐观更新 + 失败回滚**——
+  失败必须回滚并明说，静默失败会让人以为设好了，而 Bark 根本没挂上。
+- **key 要对齐**：DB 里的 code **无前缀**（`600105`），药丸内部行/分组是 `sh600105`。
+  两边直接对 key 永远对不上，所以查表统一走 `stripApiCode()`。
+- **已达标记**：`xxx_hit_at` 有值时目标价后面跟一个 `✓已推`（悬停看推送时间），
+  与手机页 `/m` 的「🎯买31.00」同一语义。
+- **一次性迁库**：旧的 `stocking.targets.v1` / `stocking.config.v1` 里的目标价按**侧**迁
+  （DB 没有买入侧才迁买入侧），迁完删掉这两个键。先迁是为了不丢用户设过的目标价，
+  后删是为了不再有第二份真相。
+
+**两个踩到的坑，都值得记**：
+
+1. **`withMacroGroup()` 重建宏观 symbol**，早先无条件重建成 `{ code }`，
+   把 `buyPrice`/`sellPrice` 整个丢掉 → 宏观目标价永远进不了 ⚡ 信号计算。
+   症状很阴：行上看得见值（那是客户端 `targets` 状态直接渲染的），
+   但「信号」tab 永远不亮。现在保留调用方带来的字段。
+2. **只改局部状态不会反映到详情页**：详情读 `/quotes` 返回的行，而行的 `buyPrice`
+   来自「发给 `/quotes` 的 groupsCfg」—— 所以 `refreshTargets()` 之后必须再
+   `refreshCfg()` 重新合并一次。首轮谁先回来是不确定的，靠碰运气就是"有时灵有时不灵"。
+
 ## 配置与持久化
 
-- 自选股配置（分组、代码、买卖目标价）存浏览器 `localStorage`（key：`stocking.config.v1`）
-- 首次打开自动从 `~/.stocking/settings.json` 一次性迁移（失败则用默认分组），之后 localStorage 为唯一数据源
-- 重置：`localStorage.removeItem('stocking.config.v1')` 后刷新页面
+- **自选股分组与关注池**：DB 为准（`stock-panel` 的 `stocks.bucket` / `stocks.groups`），
+  药丸只读镜像，增删改经 host 直写 DB
+- **买卖目标价**：DB 为准（`stock_targets`），同上
+- **留在 localStorage 的**：面板位置/尺寸、主题、MA 显隐、排序模式、**临时盯盘**分组
+  （它刻意不入库，所以只能本地），以及目标价的**一次性迁移来源**（迁完即删）
+- 重置：`localStorage.clear()` 后刷新页面（不影响 DB 里的关注池与目标价）
 
 ## License
 

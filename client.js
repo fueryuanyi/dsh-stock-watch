@@ -116,6 +116,7 @@ window.__ModuleLoader__.load({
 .sk-target{font-size:11px;white-space:nowrap}
 .sk-target-btn{background:transparent;border:1px dashed var(--sk-border);color:var(--sk-dim);border-radius:6px;padding:1px 8px;cursor:pointer;font:inherit;white-space:nowrap}
 .sk-target-btn:hover{border-color:var(--sk-cyan-border);color:var(--sk-text)}
+.sk-target-hit{color:#00c853;font-size:10px}
 .sk-target-input{width:120px;background:var(--sk-hover);border:1px solid var(--sk-cyan-border);color:var(--sk-text);border-radius:6px;padding:1px 6px;font:inherit;outline:none}
 .sk-flash{font-size:11px}
 .sk-periods{display:flex;gap:4px;flex-wrap:wrap}
@@ -176,8 +177,8 @@ window.__ModuleLoader__.load({
     const DOWN = "#00ff41";
     const FLAT = "#8b93a7";
     const YELLOW = "#ffcc00";
-    const STORAGE_KEY = "stocking.config.v1"; // 旧版全量分组配置（首启迁移目标价后不再作为分组源）
-    const TARGETS_KEY = "stocking.targets.v1"; // C 方案：目标价覆盖层 code→{buyPrice?,sellPrice?}，分组以 DB 为准
+    const STORAGE_KEY = "stocking.config.v1"; // 旧版全量分组配置：分组早已以 DB 为准，此键只在迁目标价时读一次，随后删除
+    const TARGETS_KEY = "stocking.targets.v1"; // 旧版目标价覆盖层：已收口到 DB，此键只在迁库时读一次，随后删除
     const WATCHONLY_KEY = "stocking.watchonly.v1"; // 临时盯盘（不入库）：[{code,name}]，localStorage 私货层
     const SORT_KEY = "stocking.sort.v1"; // 组内排序模式：default | chgDesc | chgAsc（localStorage 私货，与目标价同类）
     const BASE = "/dsh-stock-watch";
@@ -277,6 +278,27 @@ window.__ModuleLoader__.load({
       if (t === "buy") return { t: "买入", c: DOWN };
       if (t === "wait") return { t: "等待", c: YELLOW };
       return null;
+    }
+
+    // DB 目标价行（buy_target/sell_target/…）→ 药丸内部行形状（buyPrice/sellPrice）。
+    // 保持 camelCase 是为了不动既有渲染/触发逻辑（computeTrigger、targetChip 都读这个形状）。
+    const targetRowOf = (t) => {
+      const out = {};
+      if (t && t.buy_target !== undefined && t.buy_target !== null) out.buyPrice = t.buy_target;
+      if (t && t.sell_target !== undefined && t.sell_target !== null) out.sellPrice = t.sell_target;
+      if (t && t.buy_hit_at) out.buyHitAt = t.buy_hit_at;
+      if (t && t.sell_hit_at) out.sellHitAt = t.sell_hit_at;
+      return out;
+    };
+
+    /**
+     * 去掉市场前缀（sh600105 → 600105）。
+     * **目标价表的 code 是无前缀的**（stock_targets / /api/targets 都存 600105），
+     * 而药丸内部行/分组用的是带前缀的 sh600105 —— 两边直接对 key 永远对不上。
+     * 镜像自 index.js 的 stripApiCode（那边用于回写 DB），源头改了这里要跟着改。
+     */
+    function stripApiCode(code) {
+      return String(code || "").replace(/^(sh|sz|bj)/i, "");
     }
 
     function computeTrigger(price, buyPrice, sellPrice) {
@@ -806,6 +828,9 @@ window.__ModuleLoader__.load({
       const [error, setError] = useState(null);
       const [countdown, setCountdown] = useState(10);
       const [targetEdit, setTargetEdit] = useState(null);
+      // 定时刷新要判断「此刻是否正在编辑目标价」，但闭包里拿不到最新 state → 用 ref 镜像
+      const targetEditRef = useRef(null);
+      useEffect(() => { targetEditRef.current = targetEdit; }, [targetEdit]);
       const [flashMsg, setFlashMsg] = useState(null);
       // 一键分析防抖：进行中禁止重复点击（避免连点创建多个会话/重复扣费）
       const [analyzing, setAnalyzing] = useState(false);
@@ -885,45 +910,16 @@ window.__ModuleLoader__.load({
       const [renameEdit, setRenameEdit] = useState(null);
       const [renameTarget, setRenameTarget] = useState(null);
 
-      // 目标价覆盖层（localStorage）：读 + 迁移（旧版 STORAGE_KEY 里的 buyPrice/sellPrice 一次性搬入）
-      const [targets, setTargets] = useState(() => {
-        const out = {};
-        try {
-          const raw = window.localStorage.getItem(TARGETS_KEY);
-          if (raw) {
-            const parsed = JSON.parse(raw);
-            if (parsed && typeof parsed === "object") Object.assign(out, parsed);
-          }
-        } catch { /* ignore */ }
-        // 迁移旧版 stocking.config.v1 中的目标价（C 方案前分组存 localStorage，目标价挂在 symbol 上）
-        try {
-          const legacy = window.localStorage.getItem(STORAGE_KEY);
-          if (legacy) {
-            const parsed = JSON.parse(legacy);
-            if (parsed && Array.isArray(parsed.groups)) {
-              for (const g of parsed.groups) {
-                if (!g || !Array.isArray(g.symbols)) continue;
-                for (const s of g.symbols) {
-                  if (!s || typeof s.code !== "string") continue;
-                  const t = out[s.code] || {};
-                  if (s.buyPrice !== undefined) t.buyPrice = s.buyPrice;
-                  if (s.sellPrice !== undefined) t.sellPrice = s.sellPrice;
-                  if (t.buyPrice !== undefined || t.sellPrice !== undefined) out[s.code] = t;
-                }
-              }
-              window.localStorage.setItem(TARGETS_KEY, JSON.stringify(out));
-            }
-          }
-        } catch { /* ignore */ }
-        return out;
-      });
-
-      // 目标价变化 → 写覆盖层（不再写回全量分组）
-      useEffect(() => {
-        try {
-          window.localStorage.setItem(TARGETS_KEY, JSON.stringify(targets));
-        } catch { /* ignore */ }
-      }, [targets]);
+      // 目标价：**stock-panel 的 stock_targets 表是唯一真理源**（与关注池、分组同一口径）。
+      //
+      // 此前这里是 localStorage 覆盖层，代价是两边**互盲**：
+      //   /api/watchlist 不带目标价 → 面板/手机页/CLI 设的目标价，药丸一直看不见；
+      //   药丸里设的又只进 localStorage → 不进 DB，**Bark 永远不会推**，/m 也看不见。
+      // 现在：挂载后拉 /targets（与 /config 同节奏 60s 刷新），编辑经 host 直写 DB。
+      //
+      // localStorage 只剩一个用途：把旧的私货层**迁进 DB**，迁完删掉，不再留第二份真相。
+      // （留着就会静默遮盖 DB —— 在手机页改过目标价，药丸里却永远显示旧值。）
+      const [targets, setTargets] = useState({});
 
       // 临时盯盘（不入库）：localStorage 私货层 [{code,name}]，与 DB 关注池合并显示。
       // 加票时「临时盯盘」只写这里，不碰 DB；删除时按来源分流。
@@ -978,6 +974,76 @@ window.__ModuleLoader__.load({
         }
         tagsRef.current = m;
       }, [groupsCfg]);
+      // 旧私货层迁库：只迁 DB 里一条都没有的 code（DB 已有的以 DB 为准，不覆盖用户的更新）。
+      // 迁完无条件删掉 localStorage —— 它不该再作为第二份真相存在。
+      const migrateLegacyTargets = useCallback(async (dbMap) => {
+        let local = {};
+        try {
+          const raw = window.localStorage.getItem(TARGETS_KEY);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === "object") local = parsed;
+          }
+        } catch { /* ignore */ }
+        // 更老的一版把目标价挂在 stocking.config.v1 的 symbol 上，一并收进来（否则这些值会随删键丢掉）
+        try {
+          const legacy = window.localStorage.getItem(STORAGE_KEY);
+          if (legacy) {
+            const parsed = JSON.parse(legacy);
+            if (parsed && Array.isArray(parsed.groups)) {
+              for (const g of parsed.groups) {
+                if (!g || !Array.isArray(g.symbols)) continue;
+                for (const sym of g.symbols) {
+                  if (!sym || typeof sym.code !== "string") continue;
+                  const t = local[sym.code] || {};
+                  if (sym.buyPrice !== undefined) t.buyPrice = sym.buyPrice;
+                  if (sym.sellPrice !== undefined) t.sellPrice = sym.sellPrice;
+                  if (t.buyPrice !== undefined || t.sellPrice !== undefined) local[sym.code] = t;
+                }
+              }
+            }
+          }
+        } catch { /* ignore */ }
+        // **按侧**判断，不按整行：DB 已经有买入目标、但本地还有一条卖出目标时，
+        // 只丢买入侧、卖出侧照迁（按整行判断会把这条卖出目标静默丢掉）。
+        const pending = [];
+        for (const [code, t] of Object.entries(local)) {
+          if (!t) continue;
+          const d = dbMap[code];
+          const body = { code };
+          if (t.buyPrice !== undefined && (!d || d.buyPrice === undefined)) body.buy_target = t.buyPrice;
+          if (t.sellPrice !== undefined && (!d || d.sellPrice === undefined)) body.sell_target = t.sellPrice;
+          if (body.buy_target !== undefined || body.sell_target !== undefined) pending.push(body);
+        }
+        for (const body of pending) {
+          try {
+            await fetch(BASE + "/targets", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify(body),
+            });
+          } catch { /* 单条失败不阻断其余 */ }
+        }
+        if (pending.length > 0) {
+          // 迁完立刻重拉，避免本地 map 与 DB 不一致（DB 里现在多出这几条）
+          try {
+            const res2 = await api("/targets");
+            const raw2 = (res2 && res2.targets) || {};
+            const map2 = {};
+            for (const [code, t] of Object.entries(raw2)) map2[stripApiCode(code)] = targetRowOf(t);
+            setTargets(map2);
+          } catch { /* ignore */ }
+        }
+        try {
+          window.localStorage.removeItem(TARGETS_KEY);
+          window.localStorage.removeItem(STORAGE_KEY);
+        } catch { /* ignore */ }
+        if (pending.length > 0) {
+          console.info("[dsh-stock-watch] 已把 " + pending.length + " 条 localStorage 目标价迁进 DB: "
+            + pending.map((b) => b.code).join(", "));
+        }
+      }, []);
+
       const refreshCfg = useCallback(async () => {
         try {
           const res = await api("/config");
@@ -985,7 +1051,7 @@ window.__ModuleLoader__.load({
           const merged = dbGroups.map((g) => ({
             ...g,
             symbols: g.symbols.map((s) => {
-              const t = targetsRef.current[s.code];
+              const t = targetsRef.current[stripApiCode(s.code)];
               if (!t) return s;
               const copy = { ...s };
               if (t.buyPrice !== undefined) copy.buyPrice = t.buyPrice;
@@ -1005,12 +1071,35 @@ window.__ModuleLoader__.load({
         }
       }, []);
 
+      const refreshTargets = useCallback(async () => {
+        // 正在编辑目标价时跳过这次覆盖，否则敲到一半的字会被服务端值吃掉
+        if (targetEditRef.current) return;
+        try {
+          const res = await api("/targets");
+          const raw = (res && res.targets) || {};
+          const map = {};
+          for (const [code, t] of Object.entries(raw)) map[stripApiCode(code)] = targetRowOf(t);
+          setTargets(map);
+          // 一次性迁移：把旧 localStorage 私货层里 DB 没有的目标价升库，然后删掉私货层。
+          await migrateLegacyTargets(map);
+          // 关键：targets 改了要重新落到 groupsCfg 上，否则详情页读的是 /quotes 返回的行，
+          // 而行的 buyPrice/sellPrice 来自「发给 /quotes 的 groupsCfg」——只 setTargets 不重新合并，
+          // 界面上就还是空（第一轮 refreshTargets 与 refreshCfg 谁先回来是不确定的）。
+          await refreshCfg();
+        } catch {
+          // host/DB 不可用：保留当前值（不清空，避免整屏目标价闪没）
+        }
+      }, [migrateLegacyTargets, refreshCfg]);
+
+
+
       // 挂载 + 定时（60s）轮询 DB 配置
       useEffect(() => {
         refreshCfg();
-        const id = setInterval(refreshCfg, 60000);
+        refreshTargets();
+        const id = setInterval(() => { refreshCfg(); refreshTargets(); }, 60000);
         return () => clearInterval(id);
-      }, [refreshCfg]);
+      }, [refreshCfg, refreshTargets]);
 
       const load = useCallback(async (includeMinutes) => {
         if (!groupsCfg || groupsCfg.length === 0) return;
@@ -1121,19 +1210,9 @@ window.__ModuleLoader__.load({
         await sendAnalysis("分析" + name + "（" + view.code + "）", "投资研究报告");
       }, [view, data, sendAnalysis]);
 
-      // 目标价不可变更新：写入覆盖层 targets（持久化）+ 本地行/分组同步
-      // （分组本身以 DB 为准，这里只合并目标价，下次 refreshCfg 会按 code 重新合并）
-      const applyTarget = useCallback((code, type, price) => {
-        const key = type === "buy" ? "buyPrice" : "sellPrice";
-        setTargets((prev) => {
-          const t = { ...(prev[code] || {}) };
-          if (price === undefined) delete t[key];
-          else t[key] = price;
-          const out = { ...prev, [code]: t };
-          if (t.buyPrice === undefined && t.sellPrice === undefined) delete out[code];
-          return out;
-        });
-        // 本地立即生效（不等 60s 轮询）：直接更新 groupsCfg 与 data
+      // 本地即时生效（不等 60s 轮询 / 不等网络往返）：更新 groupsCfg + data + 全局信号列表。
+      // 只改目标价相关字段，分组本身仍以 DB 为准（下次 refreshCfg 会按 code 重新合并）。
+      const patchLocalTarget = useCallback((code, key, price) => {
         setGroupsCfg((prev) => {
           if (!prev) return prev;
           return prev.map((g) => ({
@@ -1179,15 +1258,70 @@ window.__ModuleLoader__.load({
         });
       }, []);
 
-      const commitTargetEdit = useCallback((type) => {
+      // 目标价写入 = **直写 DB（stock_targets，唯一真理源）**，本地先乐观更新保证点击即响应。
+      // 失败必须回滚并明说 —— 静默失败会让人以为设好了，而实际上 Bark 根本没挂上。
+      const applyTarget = useCallback(async (code, type, price) => {
+        const key = type === "buy" ? "buyPrice" : "sellPrice";
+        // code 是药丸内部带前缀的形态（sh600105）；目标价表的 key 是无前缀的（600105）。
+        // 两个 key 各有各的用处：mapKey 进 targets 状态，code 用于匹配行/分组。
+        const mapKey = stripApiCode(code);
+        const prevTargets = targetsRef.current;
+        const prevValue = (prevTargets[mapKey] || {})[key];
+        // 乐观更新：药丸 UI 立刻变，不用等网络
+        setTargets((prev) => {
+          const t = { ...(prev[mapKey] || {}) };
+          if (price === undefined) delete t[key];
+          else t[key] = price;
+          const out = { ...prev, [mapKey]: t };
+          if (t.buyPrice === undefined && t.sellPrice === undefined) delete out[mapKey];
+          return out;
+        });
+        patchLocalTarget(code, key, price);
+
+        try {
+          const body = { code };
+          // undefined = 清除该项（stock-panel 的 set_target 把 null 当清除；两侧皆空即删行）
+          body[type === "buy" ? "buy_target" : "sell_target"] = (price === undefined ? null : price);
+          const res = await fetch(BASE + "/targets", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          const json = await res.json().catch(() => ({}));
+          if (!res.ok || json.ok !== true) {
+            throw new Error((json && json.error) || ("HTTP " + res.status));
+          }
+          // 以服务端回值为准（它才是权威：可能被归一化，或整行被删干净）
+          const t = targetRowOf(json.target || {});
+          setTargets((prev) => {
+            const out = { ...prev };
+            if (t.buyPrice === undefined && t.sellPrice === undefined) delete out[mapKey];
+            else out[mapKey] = t;
+            return out;
+          });
+          patchLocalTarget(code, key, t[key]);
+          return true;
+        } catch (e) {
+          // 回滚到写入前，并明确告诉用户「没存上」
+          setTargets(prevTargets);
+          patchLocalTarget(code, key, prevValue);
+          flash("✘ 目标价未存入 DB：" + (e && e.message ? e.message : "本地面板服务不可用"), "#ff5555");
+          return false;
+        }
+      }, [flash, patchLocalTarget]);
+
+      const commitTargetEdit = useCallback(async (type) => {
         if (!targetEdit || targetEdit.type !== type || !view) return;
         const code = view.code;
         const value = targetEdit.value;
         setTargetEdit(null);
         const label = type === "buy" ? "买入" : "卖出";
+        // 成功提示由 applyTarget 决定（写 DB 失败时它会自己 flash 错误并回滚），
+        // 这里**不能**先报成功 —— 否则 DB 挂了还满屏「✔ 已设置」。
         if (value.trim() === "") {
-          applyTarget(code, type, undefined);
-          flash("已清除" + label + "目标价", "#888888");
+          if (await applyTarget(code, type, undefined)) {
+            flash("已清除" + label + "目标价（已同步 DB）", "#888888");
+          }
           return;
         }
         const price = parseFloat(value);
@@ -1195,8 +1329,9 @@ window.__ModuleLoader__.load({
           flash("✘ 价格无效，未保存", "#ff5555");
           return;
         }
-        applyTarget(code, type, price);
-        flash("✔ 已设置" + label + "目标价 " + formatPrice(price));
+        if (await applyTarget(code, type, price)) {
+          flash("✔ 已设置" + label + "目标价 " + formatPrice(price) + "（已同步 DB·Bark 生效）");
+        }
       }, [targetEdit, view, applyTarget, flash]);
 
       // 首次展开时预加载 Lightweight Charts
@@ -1879,6 +2014,11 @@ window.__ModuleLoader__.load({
           react.createElement("div", { className: "sk-macro-chg", style: { color } },
             row && row.live && typeof row.changePercent === "number"
               ? ((row.changePercent >= 0 ? "+" : "") + row.changePercent.toFixed(2) + "%") : ""),
+          // 口径提醒排最前：它解释的是「这个数字本身怎么读」（合约月/离岸/折算），
+          // 比"数据从哪来"更该先看到 —— 也是「为什么和别处差 2%」的答案
+          row && row.note
+            ? react.createElement("div", { className: "sk-macro-line" }, "ⓘ " + row.note)
+            : null,
           react.createElement("div", { className: "sk-macro-line" },
             "数据来自 stock-panel ",
             react.createElement("code", null, "/api/macro"),
@@ -1903,7 +2043,11 @@ window.__ModuleLoader__.load({
         const targetChip = (type) => {
           const label = type === "buy" ? "买入目标" : "卖出目标";
           const key = type === "buy" ? "buyPrice" : "sellPrice";
-          const value = row ? row[key] : undefined;
+          // 值优先读 targets 状态（/targets 的 DB 全量），row 作为兜底：
+          // 「已达标记」只有 DB 那趟有（/quotes 的行不带 hit 字段），
+          // 两处都读同一个源才不会出现「值变了但标记没跟上」。
+          const tEntry = row ? targets[stripApiCode(row.code)] : null;
+          const value = (tEntry && tEntry[key] !== undefined) ? tEntry[key] : (row ? row[key] : undefined);
           if (targetEdit && targetEdit.type === type) {
             return react.createElement("span", { className: "sk-target" },
               react.createElement("span", null, label + " "),
@@ -1924,11 +2068,18 @@ window.__ModuleLoader__.load({
                 onBlur: () => commitTargetEdit(type),
               }));
           }
+          // 已达标记：stock_targets 的 xxx_hit_at（Bark 推过的时间）。
+          // 与手机页 `/m` 的「🎯买31.00」同一语义 —— 回答「这条目标价推过没有」。
+          const hitAt = tEntry ? (type === "buy" ? tEntry.buyHitAt : tEntry.sellHitAt) : "";
           return react.createElement("button", {
             className: "sk-target sk-target-btn",
-            title: "点击编辑" + label + "（回车确认，留空清除，Esc 取消）",
+            title: "点击编辑" + label + "（回车确认，留空清除，Esc 取消）"
+              + (hitAt ? "\n已达并推送过：" + hitAt + "（改价会自动重新武装）" : ""),
             onClick: () => setTargetEdit({ type, value: value !== undefined ? String(value) : "" }),
-          }, label + " " + (value !== undefined ? formatPrice(value) : "-"));
+          }, label + " " + (value !== undefined ? formatPrice(value) : "-"),
+             value !== undefined && hitAt
+               ? react.createElement("span", { className: "sk-target-hit" }, " ✓已推")
+               : null);
         };
         return react.createElement("div", { className: "sk-panel sk-theme-" + theme, style: panelStyle },
           react.createElement("div", { className: "sk-detail-header", onMouseDown: (e) => startDrag(e, "panel"), title: "按住此处可拖动面板" },

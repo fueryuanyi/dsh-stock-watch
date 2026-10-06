@@ -136,6 +136,22 @@ dsh plugin --profile web add dsh-stock-watch
 取不到时若把名字退化成 `USDJPY` 这种代码就看不懂了。兜底只在取数失败时用，
 且此时 `live=false`（不给假价）。
 
+**涨跌幅可能是 `null`，渲染必须容忍它**（2026-10-06 修）：靠 DB 兜底的那几条
+（美元指数 / 美元日元 / 美元人民币 / 人民币账户黄金，`src: db`、`state: halted`）
+没有 prevClose，`/api/macro` 给的 `pct` 就是 `null`，但价格有值 → 行是 `live=true`。
+客户端原先写死 `row.live ? (… changePercent.toFixed(2) …) : ""`，
+而 `null >= 0` 为 true，于是接着 `.toFixed` 抛 TypeError；
+**React 渲染里抛错是整棵子树消失**，表现是「点 ⚡ 信号 整个面板空白」。
+触发条件很窄但很好撞：给某个 halted 的宏观标的设了目标价、现价又越过它，
+那一行就进了信号列表。现在统一走 `fmtPct()`（拿不到就画「—」）
+与 `pctDir()`（无涨跌幅 → 中性灰，不假装涨跌）；`scripts/test-pct-null.mjs`
+是这条回归的绊线（含「源码里不许再出现裸的 `changePercent.toFixed(`」的静态扫描）。
+
+顺带一条**口径提醒**：halted 的宏观行价格是旧价（可能已 40+ 小时），
+拿它去比目标价得到的「触发」是基于旧数据的；stock-panel 那边的 Bark 推送
+有日期守卫（非当日数据一律不判），两边口径并不一致 —— 要不要把 halted 的行
+从 ⚡ 信号 里排除，是个待定的产品决定。
+
 ## 目录结构
 
 ```

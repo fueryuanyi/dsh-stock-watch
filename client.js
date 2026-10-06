@@ -239,6 +239,29 @@ window.__ModuleLoader__.load({
       return n >= 100 ? n.toFixed(2) : n.toFixed(3);
     }
 
+    // ── 涨跌幅：必须容忍「有价、但没有涨跌幅」的 null ──────────────────────
+    // 宏观标的走 /api/macro，其中靠 DB 兜底的那几条（美元指数 / 美元日元 /
+    // 美元人民币 / 人民币账户黄金）没有 prevClose，pct 就是 **null**，但价格有值
+    // （服务端据此给 live=true + state=halted）。原先这里写死
+    // `row.live ? (… row.changePercent.toFixed(2) …) : ""`，
+    // 而 `null >= 0` 为 true，接着调 `.toFixed` 就抛 TypeError ——
+    // React 渲染里抛错是**整棵子树消失**，表现正是「点了 ⚡ 信号 就什么都没有了」。
+    // 2026-10-06 用户报障即此：美元指数设了买入目标价 103、现价 102.125（旧价）触发买入
+    // → 该行进信号列表 → 一点信号就空白。所以：拿不到涨跌幅就画「—」。
+    function fmtPct(row) {
+      if (!row || !row.live) return "";
+      const n = row.changePercent;
+      if (typeof n !== "number" || !Number.isFinite(n)) return "—";
+      return (n >= 0 ? "+" : "") + n.toFixed(2) + "%";
+    }
+    // 涨跌方向：1 涨 / -1 跌 / 0 无方向（非 live 或没有涨跌幅 → 中性灰，不假装涨跌）
+    function pctDir(row) {
+      if (!row || !row.live) return 0;
+      const n = row.changePercent;
+      if (typeof n !== "number" || !Number.isFinite(n)) return 0;
+      return n >= 0 ? 1 : -1;
+    }
+
     // 板块名（与 stock-panel 面板 signal_engine._boardName 同口径）：主板/创业板/科创板/北交所。
     // 基于 6 位代码前缀判定，不依赖市场前缀（北交所可能被 normalizeApiCode 错标为 sh，故 strip 后再判）。
     function boardOf(code) {
@@ -2004,16 +2027,14 @@ window.__ModuleLoader__.load({
         const m = (isMinute && minute && minute.code === view.code) ? minute : null;
         const k = (!isMinute && kline && kline.code === view.code && kline.period === period) ? kline : null;
         const candles = k && Array.isArray(k.candles) ? k.candles : [];
-        const isUp = row ? (row.live ? row.changePercent >= 0 : false) : false;
-        const color = row && row.live ? (isUp ? UP : DOWN) : FLAT;
+        const _dir = pctDir(row);
+        const color = _dir > 0 ? UP : (_dir < 0 ? DOWN : FLAT);
         const trig = row ? triggerMeta(row.trigger) : null;
         const dark = theme === "dark";
         const macroEl = react.createElement("div", { className: "sk-macro-note" },
           react.createElement("div", { className: "sk-macro-big" }, row && row.live ? formatPrice(row.price) : "--",
             react.createElement("span", { className: "sk-macro-unit" }, row && row.unit ? row.unit : "")),
-          react.createElement("div", { className: "sk-macro-chg", style: { color } },
-            row && row.live && typeof row.changePercent === "number"
-              ? ((row.changePercent >= 0 ? "+" : "") + row.changePercent.toFixed(2) + "%") : ""),
+          react.createElement("div", { className: "sk-macro-chg", style: { color } }, fmtPct(row)),
           // 口径提醒排最前：它解释的是「这个数字本身怎么读」（合约月/离岸/折算），
           // 比"数据从哪来"更该先看到 —— 也是「为什么和别处差 2%」的答案
           row && row.note
@@ -2091,7 +2112,7 @@ window.__ModuleLoader__.load({
             react.createElement("div", { className: "sk-detail-info" },
               react.createElement("span", { className: "sk-detail-name" }, row ? row.name : view.code),
               react.createElement("span", { className: "sk-detail-price", style: { color } }, row && row.live ? formatPrice(row.price) : "--"),
-              react.createElement("span", { className: "sk-detail-chg", style: { color } }, row && row.live ? ((row.changePercent >= 0 ? "+" : "") + row.changePercent.toFixed(2) + "%") : ""),
+              react.createElement("span", { className: "sk-detail-chg", style: { color } }, fmtPct(row)),
               trig ? react.createElement("span", { className: "sk-detail-trigger", style: { color: trig.c, borderColor: trig.c } }, trig.t) : null),
             react.createElement("div", { className: "sk-detail-targets" }, targetChip("buy"), targetChip("sell")),
             flashMsg ? react.createElement("div", { className: "sk-flash", style: { color: flashMsg.color } }, flashMsg.text) : null,
@@ -2182,8 +2203,8 @@ window.__ModuleLoader__.load({
         ? react.createElement("div", { className: "sk-empty", style: rowsFill }, error ? "行情获取失败，请稍后重试" : (signalView ? "暂无触发买入/卖出的股票" : "（当前分组为空）"))
         : react.createElement("div", { className: "sk-rows", style: rowsFill },
             displayRows.map((row) => {
-              const isUp = row.live && row.changePercent >= 0;
-              const color = row.live ? (isUp ? UP : DOWN) : FLAT;
+              const _d = pctDir(row);
+              const color = _d > 0 ? UP : (_d < 0 ? DOWN : FLAT);
               const trig = triggerMeta(row.trigger);
               const tip = row.macro
                 ? ("高 " + (row.live ? formatPrice(row.high) : "-")
@@ -2201,7 +2222,7 @@ window.__ModuleLoader__.load({
                     tagChips(row.tags))),
                 react.createElement(Sparkline, { prices: row.minutes, color }),
                 react.createElement("span", { className: "sk-price", style: { color } }, row.live ? formatPrice(row.price) : "--"),
-                react.createElement("span", { className: "sk-chg", style: { color } }, row.live ? ((row.changePercent >= 0 ? "+" : "") + row.changePercent.toFixed(2) + "%") : ""),
+                react.createElement("span", { className: "sk-chg", style: { color } }, fmtPct(row)),
                 trig
                   ? react.createElement("span", { className: "sk-trigger", style: { color: trig.c, borderColor: trig.c } }, trig.t)
                   : react.createElement("span", { className: "sk-trigger sk-trigger-none" }, "-"),

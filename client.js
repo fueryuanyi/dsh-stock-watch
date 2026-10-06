@@ -352,6 +352,28 @@ window.__ModuleLoader__.load({
     }
     // 一条理由拆成「日期 | 正文」——与 /m、面板同一口径：日期抬出来当锚点。
     // 校验（必带日期）在前端写入侧，这里兜底把整条当正文，绝不吞掉用户写的内容。
+    // 日期键：2026-10-06 / 2026/10/6 / 2026.10.6 都归一成 YYYY-MM-DD。
+    // 日期现在可以在 web 端**改**，所以列表必须按日期排 —— 否则改完日期那条会待在
+    // 原地不动，看起来像没生效（桌面面板 _tgWhySorted / 手机页 reasonSorted 同规则）。
+    function reasonDateKey(entry) {
+      const m = /^\s*(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/.exec(String(entry || ""));
+      return m ? `${m[1]}-${("0" + m[2]).slice(-2)}-${("0" + m[3]).slice(-2)}` : "";
+    }
+
+    // 展示顺序：日期新的在前；同日期按录入先后倒序（后写的更可能是最新判断）。
+    // 这里只读不改，所以不需要带存储下标（写入口在面板与 /m）。
+    function reasonSorted(text) {
+      return reasonLines(text).map((e, i) => ({ e, i })).sort((a, b) => {
+        const ka = reasonDateKey(a.e), kb = reasonDateKey(b.e);
+        if (ka !== kb) {
+          if (!ka) return 1;
+          if (!kb) return -1;
+          return ka < kb ? 1 : -1;
+        }
+        return b.i - a.i;
+      }).map((x) => x.e);
+    }
+
     function reasonSplit(entry) {
       const m = /^\s*(\d{4}[-/.]\d{1,2}[-/.]\d{1,2})\s*(.*)$/.exec(String(entry || ""));
       return m ? { d: m[1], t: m[2] } : { d: "", t: String(entry || "") };
@@ -2299,7 +2321,7 @@ window.__ModuleLoader__.load({
           const lines = [];
           [["buy", "买入"], ["sell", "卖出"]].forEach((kv) => {
             const text = kv[0] === "buy" ? tEntry.buyReason : tEntry.sellReason;
-            reasonLines(text).slice().reverse().forEach((entry) => {
+            reasonSorted(text).forEach((entry) => {
               const p = reasonSplit(entry);
               lines.push(react.createElement("div", { className: "sk-why-line", key: kv[0] + ":" + entry },
                 react.createElement("span", { className: "sk-why-k" }, kv[1] + "·"),

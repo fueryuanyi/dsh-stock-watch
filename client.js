@@ -70,6 +70,8 @@ window.__ModuleLoader__.load({
 .sk-resize:hover{opacity:1}
 .sk-resize-br{bottom:0;right:0;cursor:nwse-resize;border-bottom-right-radius:10px;background:linear-gradient(315deg,transparent 62%,var(--sk-muted) 62%,var(--sk-muted) 75%,transparent 75%)}
 .sk-del:hover{color:#ff5555;background:var(--sk-hover)}
+.sk-del-armed{width:auto;padding:0 6px;color:#ff5555;background:var(--sk-hover);
+               border:1px solid #ff5555}
 /* 宏观行只留占位（保持右侧对齐），不可点也不该看起来可点 */
 .sk-del-macro{pointer-events:none;cursor:default}
 .sk-right{display:flex;align-items:center;gap:4px;flex:none}
@@ -895,6 +897,8 @@ window.__ModuleLoader__.load({
       const [expanded, setExpanded] = useState(false);
       const [groupIndex, setGroupIndex] = useState(0);
       const [view, setView] = useState(null);
+      // 待确认删除的行（✕ 需要点两下）——「点一下就不见了」这种事不该由一次误触完成
+      const [delArmed, setDelArmed] = useState(null);
       const [period, setPeriod] = useState("minute");
       const [theme, setTheme] = useState("dark");
       const [groupsCfg, setGroupsCfg] = useState(null);
@@ -2391,10 +2395,25 @@ window.__ModuleLoader__.load({
                 row.macro
                   ? react.createElement("span", { className: "sk-del sk-del-macro", title: "宏观标的（内置分组，不可删除）" }, "")
                   : react.createElement("button", {
-                      className: "sk-del",
-                      title: "从列表删除 " + row.name,
-                      onClick: (e) => { e.stopPropagation(); removeStock(row.code, row.name); },
-                    }, "✕"));
+                      className: "sk-del" + (delArmed === row.code ? " sk-del-armed" : ""),
+                      title: delArmed === row.code
+                        ? "再点一下确认：从关注池移除 " + row.name
+                        : "从关注池移除 " + row.name + "（点一下只是准备，需再点一下确认）",
+                      onClick: (e) => {
+                        e.stopPropagation();
+                        // 两步确认：第一下只把 ✕ 变成「确认」，3 秒内再点才真删。
+                        // 它删的是**关注池里的股票**（不可用一次误触完成的操作），
+                        // 而按钮只有 18px 宽、就在行尾 —— 2026-10-06 用户报
+                        // 「点一下就不见了」，无论那次是不是误触，这一步都不该省。
+                        if (delArmed !== row.code) {
+                          setDelArmed(row.code);
+                          setTimeout(() => setDelArmed((a) => (a === row.code ? null : a)), 3000);
+                          return;
+                        }
+                        setDelArmed(null);
+                        removeStock(row.code, row.name);
+                      },
+                    }, delArmed === row.code ? "确认" : "✕"));
             }));
 
       const footer = react.createElement("div", { className: "sk-footer" },

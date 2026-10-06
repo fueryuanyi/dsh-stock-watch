@@ -2310,7 +2310,9 @@ window.__ModuleLoader__.load({
               react.createElement("button", { className: "sk-back", onClick: () => setView(null) }, "← 返回列表"),
               react.createElement("button", { className: "sk-analyze", onClick: () => analyzeStock(), disabled: analyzing }, analyzing ? "📈 分析中…" : "📈 投资研究报告"),
               react.createElement("button", { className: "sk-analyze", onClick: () => { if (view && view.code) window.open("http://localhost:8888/index.html#" + String(view.code).replace(/^(sh|sz|bj)/i, ""), "_blank"); }, title: "在 stock-panel 面板打开该股趋势图" }, "📊 面板趋势"),
-              react.createElement("button", { className: "sk-icon", onClick: () => setExpanded(false), title: "最小化回胶囊" }, "—")),
+              // 收成药丸必须给一句反馈：否则用户看到的是「面板凭空消失」
+              // （2026-10-06 报障「点一下就不见了」——药丸只有 52px，容易看漏）
+              react.createElement("button", { className: "sk-icon", onClick: () => { setExpanded(false); flash("已最小化为药丸（点右上角小球可展开）", "#888888"); }, title: "最小化回胶囊（收成右上角药丸）" }, "—")),
             react.createElement("div", { className: "sk-detail-info" },
               react.createElement("span", { className: "sk-detail-name" }, row ? row.name : view.code),
               react.createElement("span", { className: "sk-detail-price", style: { color } }, row && row.live ? formatPrice(row.price) : "--"),
@@ -2399,7 +2401,7 @@ window.__ModuleLoader__.load({
           themeToggle,
           sortToggle,
           react.createElement("button", { className: "sk-icon", onClick: () => load(true), title: "立即刷新" }, "⟳"),
-          react.createElement("button", { className: "sk-icon", onClick: () => setExpanded(false), title: "折叠" }, "—")));
+          react.createElement("button", { className: "sk-icon", onClick: () => { setExpanded(false); flash("已最小化为药丸（点右上角小球可展开）", "#888888"); }, title: "最小化（收成右上角药丸）" }, "—")));
 
       // 面板定高时列表区域 flex:1 1 0 强制填满并滚动
       const rowsFill = size ? { flex: "1 1 0", minHeight: 0 } : undefined;

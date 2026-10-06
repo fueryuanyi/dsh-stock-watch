@@ -20,9 +20,9 @@ import { readFileSync } from "node:fs";
 
 const src = readFileSync(new URL("../client.js", import.meta.url), "utf8");
 
-/** 从 client.js 里抠出一个 `function name(row) { … }` 的定义（按缩进收尾）。 */
-function pick(name) {
-  const start = src.indexOf(`function ${name}(row) {`);
+/** 从 client.js 里抠出一个 `function name(参数) { … }` 的定义（按缩进收尾）。 */
+function pick(name, arg = "row") {
+  const start = src.indexOf(`function ${name}(${arg}) {`);
   if (start < 0) throw new Error(`抽不到函数 ${name}()`);
   const end = src.indexOf("\n    }", start);
   if (end < 0) throw new Error(`${name}() 的收尾找不到`);
@@ -31,6 +31,7 @@ function pick(name) {
 
 const fmtPct = new Function(`${pick("fmtPct")}\nreturn fmtPct;`)();
 const pctDir = new Function(`${pick("pctDir")}\nreturn pctDir;`)();
+const formatPrice = new Function(`${pick("formatPrice", "p")}\nreturn formatPrice;`)();
 
 let failed = 0;
 function ok(name, cond, extra) {
@@ -57,6 +58,14 @@ ok("涨 → 1", pctDir(live(1)) === 1);
 ok("跌 → -1", pctDir(live(-1)) === -1);
 ok("0 → 1（平盘归涨色，与原来一致）", pctDir(live(0)) === 1);
 ok("非 live → 0", pctDir({ live: false, changePercent: 1 }) === 0);
+
+// ②b 价格文案：null 不能变成「0.000」（halted 宏观行的 high/low/price 都是 null）
+ok("formatPrice(null) → --（不是 0.000）", formatPrice(null) === "--", formatPrice(null));
+ok("formatPrice('') → --", formatPrice("") === "--", formatPrice(""));
+ok("formatPrice(undefined) → --", formatPrice(undefined) === "--");
+ok("formatPrice(102.125) → 102.13", formatPrice(102.125) === "102.13", formatPrice(102.125));
+ok("formatPrice(6.7035) → 6.704（三位小数口径不变）", formatPrice(6.7035) === "6.704", formatPrice(6.7035));
+ok("formatPrice(0) → 0.000（真 0 仍然照印）", formatPrice(0) === "0.000", formatPrice(0));
 
 // ③ 源码扫描：**禁止**任何 `changePercent.toFixed(` 的裸写法（注释行不算）。
 //    安全写法是先 `const n = row.changePercent` 判类型、再 `n.toFixed(2)`（fmtPct 就是这么写的），

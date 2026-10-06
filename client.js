@@ -234,6 +234,10 @@ window.__ModuleLoader__.load({
     }
 
     function formatPrice(p) {
+      // null / '' 也要判掉：Number(null) === 0 是**有限数**，
+      // 不拦的话 halted 的宏观行（high/low/price 都是 null）会印成「0.000」——
+      // 一个看着像真价格的假 0。undefined 本来就会落到 isFinite 判定，这里一并写清。
+      if (p === null || p === undefined || p === "") return "--";
       const n = Number(p);
       if (!Number.isFinite(n)) return "--";
       return n >= 100 ? n.toFixed(2) : n.toFixed(3);

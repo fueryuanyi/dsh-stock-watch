@@ -144,8 +144,11 @@ dsh plugin --profile web add dsh-stock-watch
 **React 渲染里抛错是整棵子树消失**，表现是「点 ⚡ 信号 整个面板空白」。
 触发条件很窄但很好撞：给某个 halted 的宏观标的设了目标价、现价又越过它，
 那一行就进了信号列表。现在统一走 `fmtPct()`（拿不到就画「—」）
-与 `pctDir()`（无涨跌幅 → 中性灰，不假装涨跌）；`scripts/test-pct-null.mjs`
-是这条回归的绊线（含「源码里不许再出现裸的 `changePercent.toFixed(`」的静态扫描）。
+与 `pctDir()`（无涨跌幅 → 中性灰，不假装涨跌）；同一批改动还修了
+`formatPrice(null)` —— 早先 `Number(null) === 0` 是有限数，于是 halted 宏观行
+（high/low/price 都是 null）的提示会印成「高 0.000 · 低 0.000」，一个看着像真价格的假 0。
+`scripts/test-pct-null.mjs` 是这条回归的绊线（含「源码里不许再出现裸的
+`changePercent.toFixed(`」的静态扫描）。
 
 顺带一条**口径提醒**：halted 的宏观行价格是旧价（可能已 40+ 小时），
 拿它去比目标价得到的「触发」是基于旧数据的；stock-panel 那边的 Bark 推送

@@ -869,6 +869,10 @@ window.__ModuleLoader__.load({
       const gsapLibRef = useRef(null);
       const fanTimerRef = useRef(null);
       const dataRef = useRef(null);
+      // 详情视图按 code 找行的索引（当前分组的行 ∪ ⚡ 信号 的跨分组行）。
+      // 只查 `data.rows`（当前分组）会漏掉信号里的宏观行 —— 漏了就会把宏观标的
+      // 当成股票去拉腾讯分时（宏观没有 → 「接口返回异常」+ 空图 + 目标价也读不到）。
+      const rowByCodeRef = useRef(new Map());
       const flashTimerRef = useRef(null);
       const dragRef = useRef(null);
       const lastMousePosRef = useRef(null);
@@ -1230,7 +1234,9 @@ window.__ModuleLoader__.load({
       // 完整技能指令（investment-research 分析 + frontend-design 生成网站）由 host 端条件式系统提示注入。
       const analyzeStock = useCallback(async () => {
         if (!view || !view.code) return;
-        const row = (data && Array.isArray(data.rows)) ? data.rows.find((r) => r.code === view.code) : null;
+        // 名称也走跨分组索引：从 ⚡ 信号 点进来的宏观/他组行不在当前分组的 data.rows 里，
+        // 找不到就会把标题写成「分析USDJPY（USDJPY）」这种没有名字的提示词。
+        const row = rowByCodeRef.current.get(view.code) || null;
         // 名称做控制字符清洗（防上游字段被污染的提示注入面），空则退回代码
         const rawName = ((row && row.name) || "").replace(/[\u0000-\u001f\u007f]/g, "").trim();
         const name = rawName || view.code;
@@ -1574,9 +1580,10 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         if (!expanded || !view || !view.code) return undefined;
         // 宏观标的不发腾讯请求（见上面 isMacro 的说明）—— 只是不拉图，
-        // 价格仍由外层 10s 的 /quotes 轮询刷新
-        const d = dataRef.current;
-        const r = (d && Array.isArray(d.rows)) ? d.rows.find((x) => x.code === view.code) : null;
+        // 价格仍由外层 10s 的 /quotes 轮询刷新。
+        // 注意查的是**跨分组索引**：从 ⚡ 信号 点进来的宏观行不在当前分组的 data.rows 里，
+        // 只看 data.rows 会 find 不到 → 当成股票去请求腾讯（必然「接口返回异常」）。
+        const r = rowByCodeRef.current.get(view.code) || null;
         if (r && r.macro) return undefined;
         loadDetail(view.code, period);
         const id = setInterval(() => loadDetail(view.code, period), 10000);
@@ -1911,6 +1918,17 @@ window.__ModuleLoader__.load({
       const signalRows = signalBuy.concat(signalSell).map(withTags);
       const signalBuyCount = signalBuy.length;
       const signalSellCount = signalSell.length;
+      // 详情视图 / 研究报告要按 code 找行：**当前分组的行 ∪ ⚡ 信号 的跨分组行**。
+      // ⚡ 信号 是唯一会展示别的分组（尤其 🌍 宏观）行的地方，点进去时若只在
+      // 当前分组里找，就会 find 不到 → 头部名字价格是「--」、目标价读不到、
+      // row.macro 也丢了（于是把宏观标的当股票去拉腾讯分时 → 「接口返回异常」）。
+      // 顺序上让当前分组的行优先（它带分时分钟数据，图更全）。
+      rowByCodeRef.current = (() => {
+        const m = new Map();
+        for (const r of signalRows) m.set(r.code, r);
+        for (const r of rows) m.set(r.code, r);
+        return m;
+      })();
       const themeToggle = react.createElement("button", {
         className: "sk-icon",
         onClick: () => setTheme((t) => (t === "dark" ? "light" : "dark")),
@@ -2022,7 +2040,7 @@ window.__ModuleLoader__.load({
 
       // —— 详情视图 ——
       if (view && view.code) {
-        const row = rows.find((r) => r.code === view.code);
+        const row = rowByCodeRef.current.get(view.code) || null;
         const isMinute = period === "minute";
         // 宏观标的（🌍 宏观 分组）不是股票：没有腾讯分时/K线可拉。
         // 这里给一块说明而不是让它去请求（请求只会等到超时，然后显示「获取失败」，

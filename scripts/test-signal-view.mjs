@@ -1,7 +1,7 @@
 /**
- * dsh-stock-watch — 「有价但没有涨跌幅」这条回归的绊线
+ * dsh-stock-watch — ⚡ 信号 视图的两条回归绊线（2026-10-06 用户连报两次）
  *
- * 背景（2026-10-06 用户报障：点 ⚡ 信号 什么都没有了）：
+ * 报障①「点 ⚡ 信号 什么都没有了」：
  *   宏观标的里靠 DB 兜底的那几条（美元指数 / 美元日元 / 美元人民币 / 人民币账户黄金）
  *   没有 prevClose，/api/macro 给的 `pct` 是 **null**；而价格有值，所以服务端给
  *   live=true + state=halted。客户端原先写死 `row.live ? (… changePercent.toFixed(2) …) : ""`，
@@ -9,12 +9,20 @@
  *   触发条件很窄但很好撞：**给某个 halted 的宏观标的设了目标价、现价又越过它**，
  *   那一行就进了信号列表，于是「一点信号就白」。
  *
- * 这个脚本锁两件事：
- *   ① fmtPct / pctDir 对 null / undefined / NaN 的容忍（「—」与中性灰，不假装涨跌）；
- *   ② 源码里**不再出现**裸的 `changePercent.toFixed(`（只能出现在 fmtPct 里）——
- *      这条是真正的绊线：渲染路径里任何一个新的裸用法都会重新引入同一个崩溃。
+ * 报障②「点进那一行没显示」：
+ *   详情视图/拉图 effect/研究报告是按 code 在 **当前分组** 的 data.rows 里找行；
+ *   而 ⚡ 信号 是唯一会展示别的分组（尤其 🌍 宏观）行的地方 —— 找不到行 → 头部
+ *   名字价格是「--」、目标价读不到、`row.macro` 也丢了 → 把宏观标的当股票去拉
+ *   腾讯分时 → 空图 + 「分时：接口返回异常」。修法是查跨分组索引
+ *   （`rowByCodeRef`：⚡ 信号 的行 ∪ 当前分组的行）。
  *
- * 用法：node scripts/test-pct-null.mjs
+ * 这个脚本锁四件事：
+ *   ① fmtPct / pctDir 对 null / undefined / NaN 的容忍（「—」与中性灰，不假装涨跌）；
+ *   ② formatPrice(null) 不能印成「0.000」；
+ *   ③ 源码里**不再出现**裸的 `changePercent.toFixed(`；
+ *   ④ 详情视图三处都走跨分组索引，且索引确实由「信号行 ∪ 当前分组行」拼出来。
+ *
+ * 用法：node scripts/test-signal-view.mjs
  */
 import { readFileSync } from "node:fs";
 
@@ -77,8 +85,21 @@ ok("渲染路径里没有裸的 changePercent.toFixed()", bare.length === 0, bar
 ok("涨跌幅只由 fmtPct 一处产出（判类型 + 兜底「—」）",
    /function fmtPct\(row\) \{[\s\S]*?typeof n !== "number"[\s\S]*?return "—"[\s\S]*?\n    \}/.test(src));
 
+// ④ 跨分组行查找：详情视图（头部/目标价/宏观说明）、拉图 effect、研究报告三处，
+//    都必须按「信号行 ∪ 当前分组行」的索引找 —— 只查当前分组会漏掉 ⚡ 信号 里的宏观行。
+const lookups = (src.match(/rowByCodeRef\.current\.get\(view\.code\)/g) || []).length;
+ok("三处按 code 找行都走跨分组索引（≥3 处）", lookups >= 3, lookups);
+ok("索引确实由「⚡ 信号 的行 ∪ 当前分组的行」拼出来",
+   /rowByCodeRef\.current = \(\(\) => \{[\s\S]*?for \(const r of signalRows\)[\s\S]*?for \(const r of rows\)[\s\S]*?\}\)\(\)/.test(src));
+const oldLookup = src.split("\n")
+  .map((line, i) => ({ line: line.trim(), no: i + 1 }))
+  .filter((x) => !x.line.startsWith("//")
+                 && x.line.includes("data.rows.find(")
+                 && x.line.includes("view.code"));
+ok("没有退回「只在当前分组里找行」的写法", oldLookup.length === 0, oldLookup);
+
 if (failed) {
-  console.log(`\n✘ ${failed} 项不通过 —— 「有价没涨跌幅」这条回归回来了，点 ⚡ 信号 会再次整块空白`);
+  console.log(`\n✘ ${failed} 项不通过 —— ⚡ 信号 视图的回归又回来了（空白 / 点进去没内容）`);
   process.exit(1);
 }
-console.log("\n✓ 全部通过（null 涨跌幅不会再把列表渲染打崩）");
+console.log("\n✓ 全部通过（null 涨跌幅不再打崩列表；跨分组点进去也能找到行）");

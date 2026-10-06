@@ -1327,6 +1327,17 @@ function apply(ctx) {
     sendJson(res, 200, { code: out.symbol, ...out, updatedAt: Date.now() });
   });
 
+  // 客户端渲染错误上报：错误边界把「渲染期抛错」的文本回传到这里，写进 DSH 日志。
+  // 为什么值得单独一条路由：React 渲染错误的表现是**整棵子树消失**（面板凭空不见），
+  // 浏览器控制台里的堆栈用户看不到、截图也常常来不及 —— 落到日志里才能复盘。
+  register("/dsh-stock-watch/client-error", async (req, res) => {
+    const body = await readBody(req);
+    const msg = String(body.message || "").slice(0, 400).replace(/\s+/g, " ");
+    const comp = String(body.componentStack || "").replace(/\s+/g, " ").slice(0, 400);
+    console.log(`[dsh-stock-watch] 客户端渲染错误: ${msg}${comp ? " | 组件栈:" + comp : ""}`);
+    sendJson(res, 200, { ok: true });
+  });
+
   register("/dsh-stock-watch/macro/timeline", async (req, res) => {
     const q = queryOf(req);
     const symbol = q.get("symbol") ?? "";

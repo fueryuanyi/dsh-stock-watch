@@ -72,6 +72,13 @@ window.__ModuleLoader__.load({
 .sk-del:hover{color:#ff5555;background:var(--sk-hover)}
 .sk-del-armed{width:auto;padding:0 6px;color:#ff5555;background:var(--sk-hover);
                border:1px solid #ff5555}
+/* 出错卡片：宁可占一小块地方说清楚，也不要整块消失 */
+.sk-crash{padding:14px;display:flex;flex-direction:column;gap:6px;align-items:flex-start;
+          border:1px solid #ff5555}
+.sk-crash-title{font-size:12px;font-weight:700;color:#ff5555}
+.sk-crash-msg{font-size:10.5px;color:var(--sk-muted);word-break:break-word;max-height:80px;overflow:auto}
+.sk-crash-btn{font:inherit;font-size:10.5px;padding:2px 10px;border:1px solid var(--sk-border);
+              border-radius:4px;background:var(--sk-hover);color:var(--sk-text);cursor:pointer}
 /* 宏观行只留占位（保持右侧对齐），不可点也不该看起来可点 */
 .sk-del-macro{pointer-events:none;cursor:default}
 .sk-right{display:flex;align-items:center;gap:4px;flex:none}
@@ -889,6 +896,44 @@ window.__ModuleLoader__.load({
     }
 
     // -------------------------------------------------------------- 主面板
+    // ── 错误边界（2026-10-06）─────────────────────────────────────────────
+    // 为什么必须有：React 里**渲染期抛错 = 整棵子树卸载**。插件挂在 shell.overlay
+    // 的 portal 上，于是任何一次渲染异常的表现都是「面板连同药丸一起凭空消失、
+    // 没有任何提示」，用户只能描述成「点一下就不见了」，排障也只能靠猜
+    // （当天已经撞到两次同类崩溃：null 涨跌幅、跨分组找行）。
+    // 有了边界：错误就地截住，画一张小卡片说明「出错了 + 什么错 + 重新打开」，
+    // 同时把错误文本回传 host 写进 DSH 日志 —— 下次排障不必再靠用户截图。
+    class WatchErrorBoundary extends react.Component {
+      constructor(props) {
+        super(props);
+        this.state = { err: null };
+      }
+      static getDerivedStateFromError(err) {
+        return { err };
+      }
+      componentDidCatch(err, info) {
+        const payload = {
+          message: String((err && err.message) || err || "").slice(0, 500),
+          stack: String((err && err.stack) || "").slice(0, 2000),
+          componentStack: String((info && info.componentStack) || "").slice(0, 2000),
+        };
+        try {
+          fetch("/dsh-stock-watch/client-error", {
+            method: "POST",
+            headers: {"content-type": "application/json"},
+            body: JSON.stringify(payload),
+          }).catch(() => {});
+        } catch { /* 上报失败不影响界面 */ }
+      }
+      render() {
+        if (!this.state.err) return this.props.children;
+        return react.createElement("div", { className: "sk-panel sk-crash sk-theme-" + (this.props.theme || "dark") },
+          react.createElement("div", { className: "sk-crash-title" }, "⚠ 盯盘插件渲染出错（错误已回传 DSH 日志）"),
+          react.createElement("div", { className: "sk-crash-msg" }, String((this.state.err && this.state.err.message) || this.state.err)),
+          react.createElement("button", { className: "sk-crash-btn", onClick: () => this.setState({ err: null }) }, "重新打开"));
+      }
+    }
+
     function WatchPanel(props) {
       // 槽位标准 props：useSessions / useWorkspaces 是 selector hook，传恒等选择器取整个快照
       // （current = 当前打开的会话 id；workspaces.items 用于让新会话沿用当前工作区）
@@ -2499,10 +2544,11 @@ window.__ModuleLoader__.load({
         name: "shell.overlay",
         id: "dsh-stock-watch",
       }, (props) => reactDom.createPortal(
-        react.createElement(WatchPanel, Object.assign({}, props, {
-          connection: ctx.get("connection"),
-          sessionsService: ctx.get("sessions"),
-        })),
+        react.createElement(WatchErrorBoundary, null,
+          react.createElement(WatchPanel, Object.assign({}, props, {
+            connection: ctx.get("connection"),
+            sessionsService: ctx.get("sessions"),
+          }))),
         document.body
       )));
     }

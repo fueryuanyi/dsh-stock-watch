@@ -128,6 +128,9 @@ window.__ModuleLoader__.load({
 .sk-why-t{flex:1;color:var(--sk-muted);word-break:break-word}
 /* 行内「写过理由」标记：理由在详情里，列表上不给提示就等于没写 */
 .sk-why-badge{color:var(--sk-cyan);opacity:.75;margin-left:4px;font-size:10px}
+/* 宏观说明块（图**下面**的注解：状态/来源/口径/未收盘 bar） */
+.sk-macro-below{display:flex;flex-direction:column;gap:2px;padding-top:2px}
+.sk-macro-below .sk-macro-note{padding:2px 0}
 .sk-flash{font-size:11px}
 .sk-periods{display:flex;gap:4px;flex-wrap:wrap}
 .sk-period{background:transparent;border:1px solid transparent;color:var(--sk-muted);border-radius:6px;padding:1px 8px;cursor:pointer;font:inherit}
@@ -658,6 +661,14 @@ window.__ModuleLoader__.load({
       const maVisible = props.maVisible || {};
       const fill = props.fill === true;
       const chartApiRef = props.chartApiRef || null;
+      // hasVol=false：这一栏没有成交量（现货金银/WTI），把量能序列收起来而不是画一片空白柱
+      const hasVol = props.hasVol !== false;
+      // 价格小数位：宏观各标的不同（美元指数 3 位 / 离岸人民币 4 位），默认 2 位同股票
+      const digits = Number.isFinite(Number(props.digits)) ? Math.max(0, Math.min(6, Number(props.digits))) : 2;
+      // initialVisible：首次画这一屏时只显示最近 N 根（与 /m 的 KZ_DEFAULT 对齐）；
+      // 之后的缩放/平移由用户掌握，10s 刷新不会把它拽回去
+      const initialVisible = Number.isFinite(Number(props.initialVisible)) && Number(props.initialVisible) > 0
+        ? Number(props.initialVisible) : null;
       const boxRef = useRef(null);
       const chartRef = useRef(null);
       const seriesRef = useRef(null);
@@ -686,7 +697,7 @@ window.__ModuleLoader__.load({
           borderDownColor: DOWN,
           wickUpColor: UP,
           wickDownColor: DOWN,
-          priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+          priceFormat: { type: "price", precision: digits, minMove: Math.pow(10, -digits) },
         });
         const vol = chart.addHistogramSeries({
           priceScaleId: "",
@@ -694,6 +705,7 @@ window.__ModuleLoader__.load({
           lastValueVisible: false,
           priceLineVisible: false,
           scaleMargins: { top: 0.82, bottom: 0 },
+          visible: hasVol,
         });
         // MA 均线（A 股配色：MA5 白、MA10 黄、MA20 紫、MA60 绿；MA5 随主题取可读灰色）
         const MA_CONFIG = [
@@ -710,7 +722,7 @@ window.__ModuleLoader__.load({
             lastValueVisible: false,
             crosshairMarkerVisible: false,
             visible: !maVisible || maVisible[cfg.period] !== false,
-            priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+            priceFormat: { type: "price", precision: digits, minMove: Math.pow(10, -digits) },
           });
           return { period: cfg.period, series: s };
         });
@@ -726,7 +738,7 @@ window.__ModuleLoader__.load({
           maRefs.current = [];
           if (chartApiRef) chartApiRef.current = null;
         };
-      }, [lwc, height, dark, fill]);
+      }, [lwc, height, dark, fill, hasVol, digits]);
       // MA 显隐切换：applyOptions({ visible })，无需重建图表
       useEffect(() => {
         for (const ma of maRefs.current) {
@@ -738,13 +750,21 @@ window.__ModuleLoader__.load({
         const vol = volRef.current;
         if (!series || !vol) return;
         series.setData(candles.map((c) => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close })));
-        vol.setData(candles.map((c) => ({ time: c.time, value: c.volume, color: c.close >= c.open ? "rgba(255,20,147,0.35)" : "rgba(0,255,65,0.35)" })));
+        vol.setData(hasVol
+          ? candles.map((c) => ({ time: c.time, value: c.volume, color: c.close >= c.open ? "rgba(255,20,147,0.35)" : "rgba(0,255,65,0.35)" }))
+          : []);
         for (const ma of maRefs.current || []) {
           ma.series.setData(computeMa(candles, ma.period));
         }
         if (lastFitKey.current !== fitKey && chartRef.current) {
           lastFitKey.current = fitKey;
-          chartRef.current.timeScale().fitContent();
+          const ts = chartRef.current.timeScale();
+          // 只显示最近 initialVisible 根（右端留一点空位）；没有这个要求就照旧全量 fit
+          if (initialVisible && candles.length > initialVisible) {
+            ts.setVisibleLogicalRange({ from: candles.length - initialVisible, to: candles.length - 1 + 3 });
+          } else {
+            ts.fitContent();
+          }
         }
       }, [candles, lwc, fitKey]);
       return react.createElement("div", { ref: boxRef, className: "sk-chart-box", style: fill ? { width: "100%", flex: "1 1 0", minHeight: 0 } : { width: "100%", height } });
@@ -826,6 +846,9 @@ window.__ModuleLoader__.load({
         let cumV = 0;
         let cumA = 0;
         avg.setData(points.map((pt) => {
+          // 数据源自带逐点均价（宏观分时的 avgPrice）就用它 —— 宏观没有成交量，
+          // 靠 v 累加会退化成「均价线压在价格线上」这种看着像坏了的画面
+          if (typeof pt.avg === "number" && Number.isFinite(pt.avg)) return { time: pt.t, value: pt.avg };
           cumV += pt.v;
           cumA += pt.p * pt.v;
           return { time: pt.t, value: cumV > 0 ? cumA / cumV : pt.p };
@@ -1174,6 +1197,15 @@ window.__ModuleLoader__.load({
         }
       }, [groupIndex, groupsCfg]);
 
+      // 是不是宏观标的：优先用 /quotes 行上的 `macro` 标记（服务端 isMacroCode 的结论），
+      // 行还没到手时退回「不是 6 位数字代码」这个判据 —— 宏观 symbol 都带命名空间
+      // （DXY / XAU / IDX.SSEC），与股票代码零交集（stock-panel 当初就是这么隔离的）。
+      const isMacroRowCode = (code) => {
+        const r = rowByCodeRef.current.get(code);
+        if (r && typeof r.macro === "boolean") return r.macro;
+        return !/^\d{6}$/.test(String(code || "").replace(/^(sh|sz|bj)/i, ""));
+      };
+
       const loadDetail = useCallback(async (code, per) => {
         let refPrice = null;
         const d = dataRef.current;
@@ -1181,10 +1213,20 @@ window.__ModuleLoader__.load({
           const r = d.rows.find((x) => x.code === code);
           if (r && r.live && typeof r.price === "number") refPrice = r.price;
         }
+        // 宏观标的走 stock-panel 的 /api/macro/*（与手机页 /m **同一个接口**，
+        // 因此数据逐点一致；插件不自拉、也不做第二套合成口径）。
+        // bars 与 /m 的 KZ_FETCH 对齐（日 240 / 周 260 / 月 120）。
+        const macro = isMacroRowCode(code);
         try {
           if (per === "minute") {
-            const res = await api("/minute", { code });
+            const res = macro
+              ? await api("/macro/timeline", { symbol: code })
+              : await api("/minute", { code });
             setMinute(res);
+          } else if (macro) {
+            const bars = per === "day" ? 240 : per === "week" ? 260 : 120;
+            const res = await api("/macro/kline", { symbol: code, period: per, bars });
+            setKline(res);
           } else {
             const res = await api("/kline", { code, period: per, refPrice });
             setKline(res);
@@ -1610,12 +1652,9 @@ window.__ModuleLoader__.load({
       // 详情视图：进入 / 切周期 / 每 10s 刷新
       useEffect(() => {
         if (!expanded || !view || !view.code) return undefined;
-        // 宏观标的不发腾讯请求（见上面 isMacro 的说明）—— 只是不拉图，
-        // 价格仍由外层 10s 的 /quotes 轮询刷新。
-        // 注意查的是**跨分组索引**：从 ⚡ 信号 点进来的宏观行不在当前分组的 data.rows 里，
-        // 只看 data.rows 会 find 不到 → 当成股票去请求腾讯（必然「接口返回异常」）。
-        const r = rowByCodeRef.current.get(view.code) || null;
-        if (r && r.macro) return undefined;
+        // 宏观标的**也拉图**（2026-10-06 起）：走 stock-panel 的 /api/macro/*，
+        // 与手机页 /m 同一个接口、同一份数据，所以不再需要「宏观不请求」这条早退。
+        // 每 10s 重进一次（=与股票同一节奏），服务端那边有按周期的缓存，不会打爆源。
         loadDetail(view.code, period);
         const id = setInterval(() => loadDetail(view.code, period), 10000);
         return () => clearInterval(id);
@@ -2107,16 +2146,45 @@ window.__ModuleLoader__.load({
             ? react.createElement("div", { className: "sk-macro-line" }, "⚠ " + row.stateNote)
             : null,
           react.createElement("div", { className: "sk-macro-line" },
-            "趋势图请看面板 🌍 宏观 tab，或手机页 /m 的「🌍 宏观」。"));
-        const chartEl = isMacro ? macroEl : (isMinute
+            "K线/分时与手机页 /m 读的是同一个接口（stock-panel ",
+            react.createElement("code", null, "/api/macro/kline"),
+            "），逐点相同；这里不另做一套合成口径。"));
+        // 图表：宏观与股票走**同一套**组件、同一份数据形状（差别只在数据源）。
+        // 量能栏：现货金银/WTI 没有成交量（hasVol=false）→ 收起那一栏，
+        // 与 /m 的「上K线 / 下MACD（现货无成交量）」同一取舍。
+        // 小数位：宏观各标的不同（日元 3 位 / 离岸人民币 4 位），跟数据里的 digits 走。
+        const chartDigits = Number.isFinite(Number(k && k.digits)) ? Number(k.digits) : 2;
+        const chartHasVol = !(k && k.hasVol === false);
+        const chartEl = isMinute
           ? (lwc
               ? react.createElement(MinuteChart, { lwc, points: m && Array.isArray(m.points) ? m.points : [], prevClose: m ? m.prevClose : null, height: 240, dark, fitKey: view.code + ":minute", fill: !!size })
               : react.createElement(SvgMinute, { points: m && Array.isArray(m.points) ? m.points : [], prevClose: m ? m.prevClose : null, width: 380, height: 228, dark, fill: !!size }))
           : (lwc
-              ? react.createElement(LwcChart, { lwc, candles, height: 240, dark, fitKey: view.code + ":" + period, maVisible, fill: !!size, chartApiRef: klineChartApiRef })
-              : react.createElement(SvgCandles, { candles, width: 380, height: 228, fill: !!size })));
+              ? react.createElement(LwcChart, {
+                  lwc, candles, height: 240, dark, fill: !!size, maVisible,
+                  fitKey: view.code + ":" + period,
+                  chartApiRef: klineChartApiRef,
+                  hasVol: chartHasVol,
+                  digits: chartDigits,
+                  // 初始可见根数与 /m 的 KZ_DEFAULT 一致（日 60 / 周 120 / 月 60）：
+                  // 取数取满（240/260/120）但默认只显示这一段，缩放往回还能看到更早的
+                  initialVisible: isMacro ? (period === "day" ? 60 : period === "week" ? 120 : 60) : null,
+                })
+              : react.createElement(SvgCandles, { candles, width: 380, height: 228, fill: !!size }));
+        // 宏观专属说明块（状态/来源/口径提醒/未收盘 bar）放到图**下面**：
+        // 图是主角，说明是注解 —— 反过来的话每次看 K 线都要先划过五行小字。
+        const macroNoteBelow = isMacro
+          ? react.createElement("div", { className: "sk-macro-below" },
+              k && k.live ? react.createElement("div", { className: "sk-macro-line" },
+                "⚠ 末根为盘中未收盘 bar" + (k.liveState && k.liveState !== "closed" ? "（" + k.liveState + "）" : "")
+                  + (k.liveAt ? " · " + k.liveAt : "")) : null,
+              macroEl)
+          : null;
         const footText = isMacro
-          ? ((row && row.stateNote) ? row.stateNote : "宏观标的 · 无分时/K线")
+          ? (isMinute
+              ? (m === null ? "分时加载中…" : (m && m.error ? "分时：" + m.error : m.points.length + " 个分时点" + (m.span ? "（" + m.span + "）" : "")))
+              : (k === null ? "K线加载中…" : (k && k.error ? "K线：" + k.error : (candles.length + " 根K线（可见 " + (period === "day" ? 60 : period === "week" ? 120 : 60) + "）"))))
+            + ((row && row.stateNote) ? " · " + row.stateNote : "")
           : isMinute
           ? (m === null ? "分时加载中…" : (m && m.error ? "分时：" + m.error : (m && Array.isArray(m.points) ? m.points.length + " 个分时点" : "")))
           : (k === null ? "K线加载中…" : (k && k.error ? "K线：" + k.error : (candles.length + " 根K线")));
@@ -2202,14 +2270,15 @@ window.__ModuleLoader__.load({
             react.createElement("div", { className: "sk-detail-targets" }, targetChip("buy"), targetChip("sell")),
             whyBlock,
             flashMsg ? react.createElement("div", { className: "sk-flash", style: { color: flashMsg.color } }, flashMsg.text) : null,
-            !isMacro && react.createElement("div", { className: "sk-periods" },
+            // 周期切换：宏观与股票一样给四档 —— /m 的宏观图同样是 分时/日K/周K/月K
+            react.createElement("div", { className: "sk-periods" },
               ["minute", "day", "week", "month"].map((p) =>
                 react.createElement("button", {
                   key: p,
                   className: "sk-period" + (p === period ? " sk-period-active" : ""),
                   onClick: () => setPeriod(p),
                 }, p === "minute" ? "分时" : p === "day" ? "日K" : p === "week" ? "周K" : "月K")))),
-            !isMinute && !isMacro && react.createElement("div", { className: "sk-ma-row" },
+            !isMinute && react.createElement("div", { className: "sk-ma-row" },
               react.createElement("span", { className: "sk-zoom" },
                 react.createElement("button", { className: "sk-zoom-btn", title: "缩小K线", onClick: () => zoomKline(1 / 1.35) }, "−"),
                 react.createElement("button", { className: "sk-zoom-btn", title: "放大K线", onClick: () => zoomKline(1.35) }, "+"),
@@ -2227,6 +2296,7 @@ window.__ModuleLoader__.load({
                     "MA" + p);
                 }))),
           chartEl,
+          macroNoteBelow,
           react.createElement("div", { className: "sk-detail-foot" },
             react.createElement("span", null, footText),
             react.createElement("span", { className: "sk-right" }, themeToggle,

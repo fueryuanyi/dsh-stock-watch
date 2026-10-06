@@ -88,7 +88,12 @@ ok("涨跌幅只由 fmtPct 一处产出（判类型 + 兜底「—」）",
 // ④ 跨分组行查找：详情视图（头部/目标价/宏观说明）、拉图 effect、研究报告三处，
 //    都必须按「信号行 ∪ 当前分组行」的索引找 —— 只查当前分组会漏掉 ⚡ 信号 里的宏观行。
 const lookups = (src.match(/rowByCodeRef\.current\.get\(view\.code\)/g) || []).length;
-ok("三处按 code 找行都走跨分组索引（≥3 处）", lookups >= 3, lookups);
+ok("按 code 找行都走跨分组索引（详情渲染 + 研究报告，≥2 处）", lookups >= 2, lookups);
+// 拉图 effect 不再按「宏观就早退」处理：2026-10-06 起宏观也要拉图
+// （走 stock-panel 的 /api/macro/*，与 /m 同一个接口）
+ok("拉图 effect 不再对宏观早退", !/if \(r && r\.macro\) return undefined;/.test(src));
+ok("宏观图走 /macro/kline 与 /macro/timeline 两条新路由",
+   src.includes('api("/macro/kline"') && src.includes('api("/macro/timeline"'));
 ok("索引确实由「⚡ 信号 的行 ∪ 当前分组的行」拼出来",
    /rowByCodeRef\.current = \(\(\) => \{[\s\S]*?for \(const r of signalRows\)[\s\S]*?for \(const r of rows\)[\s\S]*?\}\)\(\)/.test(src));
 const oldLookup = src.split("\n")

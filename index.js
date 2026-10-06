@@ -496,6 +496,130 @@ async function fetchMacroQuotes() {
 }
 
 // ---------------------------------------------------------------------------
+// 宏观标的的 K 线 / 分时（数据源只有一个：stock-panel 的 /api/macro/*）
+// ---------------------------------------------------------------------------
+// 为什么必须走 stock-panel 而不是自己拉：
+//   ① 宏观 9 个标的不是股票，腾讯/新浪都没有能直接对上的代码与复权口径；
+//   ② 手机页 /m 的宏观图读的就是 `/api/macro/kline`（macro_klines 表 + 现货金银的
+//      「当日未收盘 bar」合成），**要与 /m 一致就只能是同一份数据**；
+//   ③ 顺带白拿它的多源降级、状态判定与均线/MACD，插件不再维护第二套口径。
+//
+// 响应形状刻意与 /api/kline 对齐（d/o/h/l/c/v/m5/m10/m20），这里转成插件内部
+// 既有的 candles 形状，客户端那套 LwcChart 一行不改就能画。
+const MACRO_FETCH_TIMEOUT = 12000;
+
+async function fetchMacroKline(symbol, period, bars) {
+  const mid = String(symbol || "").trim().toUpperCase();
+  if (!isMacroCode(mid)) return { candles: [], error: "不是宏观标的" };
+  const per = period === "week" || period === "month" ? period : "day";
+  const base = { symbol: mid, period: per };
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), MACRO_FETCH_TIMEOUT);
+  try {
+    const url = `${dbApiBase()}/api/macro/kline?symbol=${encodeURIComponent(mid)}`
+      + `&period=${per}&bars=${encodeURIComponent(String(bars || 60))}`;
+    const r = await fetch(url, { signal: ctrl.signal });
+    const json = await r.json().catch(() => ({}));
+    if (!r.ok || !json || json.ok === false) {
+      return { ...base, candles: [], error: (json && json.error) || `本地 API 返回 ${r.status}` };
+    }
+    const b = (json && json.bars) || {};
+    const d = Array.isArray(b.d) ? b.d : [];
+    const candles = [];
+    for (let i = 0; i < d.length; i++) {
+      const open = Number(b.o?.[i]);
+      const high = Number(b.h?.[i]);
+      const low = Number(b.l?.[i]);
+      const close = Number(b.c?.[i]);
+      if (![open, high, low, close].every(Number.isFinite)) continue;
+      candles.push({
+        time: String(d[i]),
+        open, high, low, close,
+        volume: Number(b.v?.[i]) || 0,
+      });
+    }
+    return {
+      ...base,
+      candles,
+      name: json.name || MACRO_NAMES[mid] || mid,
+      unit: json.unit || "",
+      digits: Number.isFinite(Number(json.digits)) ? Number(json.digits) : 2,
+      // 现货金银与 WTI 没有成交量（v 恒 0）：客户端据此把量能那一栏收掉，
+      // 与 /m 的「上K线 / 下MACD（现货无成交量）」同一取舍，而不是画一片空白柱
+      hasVol: json.hasVol !== false,
+      // 当日未收盘 bar（新浪外汇日线滞后 ≥1 天时补的那根）：与 /m 用同一根，
+      // 差别只在 /m 画空心、Lightweight Charts 画不了空心 —— 所以这里把
+      // live/liveState 透传给客户端，由它写在状态行里说清「末根是未收盘的」
+      live: !!json.live,
+      liveState: json.liveState || null,
+      liveAt: json.liveAt || null,
+      error: candles.length ? null : "无K线数据",
+    };
+  } catch {
+    return { ...base, candles: [], error: "本地 API 不可用（stock-panel 8888）" };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchMacroTimeline(symbol) {
+  const mid = String(symbol || "").trim().toUpperCase();
+  if (!isMacroCode(mid)) return { points: [], error: "不是宏观标的" };
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), MACRO_FETCH_TIMEOUT);
+  try {
+    const url = `${dbApiBase()}/api/macro/timeline?symbol=${encodeURIComponent(mid)}`;
+    const r = await fetch(url, { signal: ctrl.signal });
+    const json = await r.json().catch(() => ({}));
+    if (!r.ok || !json || json.ok === false) {
+      return { symbol: mid, points: [], prevClose: null,
+               error: (json && json.error) || `本地 API 返回 ${r.status}` };
+    }
+    const s = (Array.isArray(json.data) ? json.data[0] : null) || null;
+    const raw = (s && Array.isArray(s.data)) ? s.data : [];
+    // date 是 YYYYMMDD（stock-panel 侧剥了横线）；24 小时盘横跨两个日历日，
+    // 所以按「时间回绕即进下一天」逐点递增，而不是一律挂同一个日期
+    const iso = /^\d{8}$/.test(String(s && s.date || ""))
+      ? `${String(s.date).slice(0, 4)}-${String(s.date).slice(4, 6)}-${String(s.date).slice(6, 8)}`
+      : "";
+    const points = [];
+    let dayOffset = 0;
+    let prevHm = "";
+    for (const pt of raw) {
+      const hm = String((pt && pt.time) || "").slice(0, 5);
+      const p = Number(pt && pt.price);
+      if (!/^\d{2}:\d{2}$/.test(hm) || !Number.isFinite(p)) continue;
+      if (prevHm && hm < prevHm) dayOffset += 1;      // 跨过一个日历日
+      prevHm = hm;
+      let t = 0;
+      if (iso) {
+        const ms = Date.parse(`${iso}T${hm}:00+08:00`);
+        if (!Number.isNaN(ms)) t = Math.round(ms / 1000) + dayOffset * 86400;
+      }
+      if (!t) continue;
+      const avg = Number(pt.avgPrice);
+      points.push({ t, p, avg: Number.isFinite(avg) ? avg : null, v: 0 });
+    }
+    if (points.length === 0) {
+      return { symbol: mid, points: [], prevClose: (s && s.preClose) ?? null,
+               date: iso, span: (s && s.span) || "", digits: s?.digits, unit: s?.unit || "",
+               macro: true, error: "无分时数据（非交易时段或数据源不可用）" };
+    }
+    return {
+      symbol: mid, points,
+      prevClose: (s && s.preClose) ?? null,
+      date: iso, span: (s && s.span) || "",
+      digits: s?.digits, unit: s?.unit || "",
+      macro: true, error: null,
+    };
+  } catch {
+    return { symbol: mid, points: [], prevClose: null, error: "本地 API 不可用（stock-panel 8888）" };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 腾讯财经接口（与 stocking/src/market.ts 同源）
 // ---------------------------------------------------------------------------
 
@@ -1183,6 +1307,31 @@ function apply(ctx) {
       error: result.error,
       updatedAt: Date.now(),
     });
+  });
+
+  // 宏观标的的 K 线 / 分时：与手机页 /m 读**同一个** stock-panel 接口
+  // （/api/macro/kline、/api/macro/timeline），所以数据逐点相同；插件侧只把它
+  // 转成内部 candles/points 形状，渲染仍走同一套 LwcChart / MinuteChart。
+  // 之所以要这层代理：浏览器端在 DSH 的源上（3080），跨到 8888 会被 CORS 拦。
+  register("/dsh-stock-watch/macro/kline", async (req, res) => {
+    const q = queryOf(req);
+    const symbol = q.get("symbol") ?? "";
+    const period = q.get("period") === "week" || q.get("period") === "month" ? q.get("period") : "day";
+    // 取数根数与 /m 的 KZ_FETCH 一致（日 240 / 周 260 / 月 120）——
+    // 少取的话「和 /m 看到的不是同一段历史」，缩放也没得放。
+    const dflt = period === "day" ? 240 : period === "week" ? 260 : 120;
+    const bars = parseInt(q.get("bars") ?? String(dflt), 10) || dflt;
+    const out = await fetchMacroKline(symbol, period, bars);
+    // 带上 `code`：客户端判定「这份数据是不是当前这只票的」用的是 `kline.code === view.code`
+    // （股票那条路由就是 code），形状对齐才不会出现「数据到了但一直显示加载中」
+    sendJson(res, 200, { code: out.symbol, ...out, updatedAt: Date.now() });
+  });
+
+  register("/dsh-stock-watch/macro/timeline", async (req, res) => {
+    const q = queryOf(req);
+    const symbol = q.get("symbol") ?? "";
+    const out = await fetchMacroTimeline(symbol);
+    sendJson(res, 200, { code: out.symbol, ...out, updatedAt: Date.now() });
   });
 
   // 一键分析配套：客户端只发送简短消息「分析{公司名}（代码）」，这里注入一条条件式系统指令，

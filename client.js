@@ -118,6 +118,16 @@ window.__ModuleLoader__.load({
 .sk-target-btn:hover{border-color:var(--sk-cyan-border);color:var(--sk-text)}
 .sk-target-hit{color:#00c853;font-size:10px}
 .sk-target-input{width:120px;background:var(--sk-hover);border:1px solid var(--sk-cyan-border);color:var(--sk-text);border-radius:6px;padding:1px 6px;font:inherit;outline:none}
+/* 理由（「为什么设这个价」）：与面板 / 手机页 /m 同一份存储，这里只读展示。
+   条目多时给固定高度 + 内部滚动 —— 详情页的图不能被理由挤没了。 */
+.sk-why{display:flex;flex-direction:column;gap:2px;max-height:76px;overflow-y:auto;
+        border-left:2px solid var(--sk-cyan-border);padding-left:8px}
+.sk-why-line{font-size:10.5px;line-height:1.45;display:flex;gap:6px;align-items:baseline}
+.sk-why-k{flex:none;color:var(--sk-dim)}
+.sk-why-d{flex:none;color:var(--sk-cyan);font-variant-numeric:tabular-nums}
+.sk-why-t{flex:1;color:var(--sk-muted);word-break:break-word}
+/* 行内「写过理由」标记：理由在详情里，列表上不给提示就等于没写 */
+.sk-why-badge{color:var(--sk-cyan);opacity:.75;margin-left:4px;font-size:10px}
 .sk-flash{font-size:11px}
 .sk-periods{display:flex;gap:4px;flex-wrap:wrap}
 .sk-period{background:transparent;border:1px solid transparent;color:var(--sk-muted);border-radius:6px;padding:1px 8px;cursor:pointer;font:inherit}
@@ -309,14 +319,31 @@ window.__ModuleLoader__.load({
 
     // DB 目标价行（buy_target/sell_target/…）→ 药丸内部行形状（buyPrice/sellPrice）。
     // 保持 camelCase 是为了不动既有渲染/触发逻辑（computeTrigger、targetChip 都读这个形状）。
+    // 理由（2026-10-06 加）也必须一起搬过来 —— 它与目标价是**同一行数据**：
+    // stock_targets 的 buy_reason / sell_reason 是「按日期累积的条目日志」（\n 分隔），
+    // 与 stock-panel 面板、手机页 /m 读写同一份，插件这边只读展示。
     const targetRowOf = (t) => {
       const out = {};
       if (t && t.buy_target !== undefined && t.buy_target !== null) out.buyPrice = t.buy_target;
       if (t && t.sell_target !== undefined && t.sell_target !== null) out.sellPrice = t.sell_target;
       if (t && t.buy_hit_at) out.buyHitAt = t.buy_hit_at;
       if (t && t.sell_hit_at) out.sellHitAt = t.sell_hit_at;
+      if (t && t.buy_reason) out.buyReason = t.buy_reason;
+      if (t && t.sell_reason) out.sellReason = t.sell_reason;
       return out;
     };
+
+    // 理由条目日志（\n 分隔）→ 条目数组；空行丢弃。
+    function reasonLines(text) {
+      return String(text == null ? "" : text).split("\n")
+        .map((s) => s.trim()).filter((s) => s);
+    }
+    // 一条理由拆成「日期 | 正文」——与 /m、面板同一口径：日期抬出来当锚点。
+    // 校验（必带日期）在前端写入侧，这里兜底把整条当正文，绝不吞掉用户写的内容。
+    function reasonSplit(entry) {
+      const m = /^\s*(\d{4}[-/.]\d{1,2}[-/.]\d{1,2})\s*(.*)$/.exec(String(entry || ""));
+      return m ? { d: m[1], t: m[2] } : { d: "", t: String(entry || "") };
+    }
 
     /**
      * 去掉市场前缀（sh600105 → 600105）。
@@ -1306,7 +1333,10 @@ window.__ModuleLoader__.load({
           if (price === undefined) delete t[key];
           else t[key] = price;
           const out = { ...prev, [mapKey]: t };
-          if (t.buyPrice === undefined && t.sellPrice === undefined) delete out[mapKey];
+          // 只有「价与理由全空」才算这只票没记录了（与后端 set_target 的删行口径一致）——
+          // 理由是可再生的反面：手写判断，丢了不可再生，不能因为清了价就顺手抹掉。
+          if (t.buyPrice === undefined && t.sellPrice === undefined
+              && !t.buyReason && !t.sellReason) delete out[mapKey];
           return out;
         });
         patchLocalTarget(code, key, price);
@@ -1328,7 +1358,8 @@ window.__ModuleLoader__.load({
           const t = targetRowOf(json.target || {});
           setTargets((prev) => {
             const out = { ...prev };
-            if (t.buyPrice === undefined && t.sellPrice === undefined) delete out[mapKey];
+            if (t.buyPrice === undefined && t.sellPrice === undefined
+                && !t.buyReason && !t.sellReason) delete out[mapKey];
             else out[mapKey] = t;
             return out;
           });
@@ -1929,6 +1960,12 @@ window.__ModuleLoader__.load({
         for (const r of rows) m.set(r.code, r);
         return m;
       })();
+      // 有理由吗？列表行上的 ✍ 标记用。理由是手写判断，值得在列表上一眼看见
+      // （否则「写过理由」这件事只有点开才知道，等于没写）。
+      const hasReason = (code) => {
+        const t = targets[stripApiCode(code)];
+        return !!(t && (t.buyReason || t.sellReason));
+      };
       const themeToggle = react.createElement("button", {
         className: "sk-icon",
         onClick: () => setTheme((t) => (t === "dark" ? "light" : "dark")),
@@ -2124,6 +2161,32 @@ window.__ModuleLoader__.load({
                ? react.createElement("span", { className: "sk-target-hit" }, " ✓已推")
                : null);
         };
+        // 📝 理由：与目标价**同一处**（就在买入/卖出目标那一行下面）——
+        // 「在哪个价动手」和「为什么在这个价动手」本来就该挨着看。
+        // 数据源是同一份 stock_targets（/targets 的 60s 轮询），所以在 stock-panel 面板
+        // 或手机页 /m 上写的理由，这里一分钟内自动出现；插件里只读，不给编辑入口
+        // （写理由要完整键盘，面板与 /m 才是写入口）。
+        // 按侧分组、时间倒序（最想看的永远是最近那次判断）。
+        const whyBlock = (() => {
+          const tEntry = targets[stripApiCode(view.code)] || null;
+          if (!tEntry) return null;
+          const lines = [];
+          [["buy", "买入"], ["sell", "卖出"]].forEach((kv) => {
+            const text = kv[0] === "buy" ? tEntry.buyReason : tEntry.sellReason;
+            reasonLines(text).slice().reverse().forEach((entry) => {
+              const p = reasonSplit(entry);
+              lines.push(react.createElement("div", { className: "sk-why-line", key: kv[0] + ":" + entry },
+                react.createElement("span", { className: "sk-why-k" }, kv[1] + "·"),
+                p.d ? react.createElement("span", { className: "sk-why-d" }, p.d) : null,
+                react.createElement("span", { className: "sk-why-t" }, p.t || entry)));
+            });
+          });
+          if (lines.length === 0) return null;
+          return react.createElement("div", {
+            className: "sk-why",
+            title: "买入/卖出理由（按日期累积）· 与 stock-panel 面板、手机页 /m 同一份数据",
+          }, lines);
+        })();
         return react.createElement("div", { className: "sk-panel sk-theme-" + theme, style: panelStyle },
           react.createElement("div", { className: "sk-detail-header", onMouseDown: (e) => startDrag(e, "panel"), title: "按住此处可拖动面板" },
             react.createElement("div", { className: "sk-detail-top" },
@@ -2137,6 +2200,7 @@ window.__ModuleLoader__.load({
               react.createElement("span", { className: "sk-detail-chg", style: { color } }, fmtPct(row)),
               trig ? react.createElement("span", { className: "sk-detail-trigger", style: { color: trig.c, borderColor: trig.c } }, trig.t) : null),
             react.createElement("div", { className: "sk-detail-targets" }, targetChip("buy"), targetChip("sell")),
+            whyBlock,
             flashMsg ? react.createElement("div", { className: "sk-flash", style: { color: flashMsg.color } }, flashMsg.text) : null,
             !isMacro && react.createElement("div", { className: "sk-periods" },
               ["minute", "day", "week", "month"].map((p) =>
@@ -2238,7 +2302,11 @@ window.__ModuleLoader__.load({
                 react.createElement("span", { className: "sk-name" },
                   react.createElement("span", { className: "sk-name-row" },
                     react.createElement("span", { className: "sk-name-text", style: { color: row.live ? "var(--sk-text)" : FLAT } }, row.name),
-                    row.macro ? null : boardChip(row.code)),
+                    row.macro ? null : boardChip(row.code),
+                    // 写过理由就点一下：理由藏在详情里，列表上不提示等于没写
+                    hasReason(row.code)
+                      ? react.createElement("span", { className: "sk-why-badge", title: "写过买入/卖出理由（点开看）" }, "✍")
+                      : null),
                   react.createElement("span", { className: "sk-code" },
                     row.code.replace(/^(sh|sz)/, ""),
                     tagChips(row.tags))),

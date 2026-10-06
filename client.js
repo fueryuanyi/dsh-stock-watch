@@ -676,8 +676,10 @@ window.__ModuleLoader__.load({
       const digits = Number.isFinite(Number(props.digits)) ? Math.max(0, Math.min(6, Number(props.digits))) : 2;
       // initialVisible：首次画这一屏时只显示最近 N 根（与 /m 的 KZ_DEFAULT 对齐）；
       // 之后的缩放/平移由用户掌握，10s 刷新不会把它拽回去
-      const initialVisible = Number.isFinite(Number(props.initialVisible)) && Number(props.initialVisible) > 0
-        ? Number(props.initialVisible) : null;
+      // 同样把空值判断放前面：props.initialVisible 常见取值就是 null
+      // （股票详情不限制初始可见根数），别让 Number(null)===0 影响可读性
+      const initialVisible = (props.initialVisible != null && Number.isFinite(Number(props.initialVisible))
+        && Number(props.initialVisible) > 0) ? Number(props.initialVisible) : null;
       const boxRef = useRef(null);
       const chartRef = useRef(null);
       const seriesRef = useRef(null);
@@ -2202,7 +2204,14 @@ window.__ModuleLoader__.load({
         // 量能栏：现货金银/WTI 没有成交量（hasVol=false）→ 收起那一栏，
         // 与 /m 的「上K线 / 下MACD（现货无成交量）」同一取舍。
         // 小数位：宏观各标的不同（日元 3 位 / 离岸人民币 4 位），跟数据里的 digits 走。
-        const chartDigits = Number.isFinite(Number(k && k.digits)) ? Number(k.digits) : 2;
+        //
+        // ⚠️ 这里的写法踩过坑（2026-10-06 用户报「点一下股票整块面板就没了」的真凶）：
+        //   `Number.isFinite(Number(k && k.digits)) ? Number(k.digits) : 2`
+        // k 为 null 时 `k && k.digits` = null，而 **Number(null) === 0** → isFinite(0) = true
+        // → 三元走进 true 分支 → 读 null.digits → TypeError。而 k 为 null 恰好是
+        // 「刚点开一只股票、K线还没回来」的第一次渲染 —— 于是**每次点都崩**。
+        // 空值判断必须在 isFinite 外面。
+        const chartDigits = (k && Number.isFinite(Number(k.digits))) ? Number(k.digits) : 2;
         const chartHasVol = !(k && k.hasVol === false);
         const chartEl = isMinute
           ? (lwc

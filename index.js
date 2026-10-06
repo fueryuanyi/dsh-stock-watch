@@ -1402,6 +1402,31 @@ function apply(ctx) {
   // （/api/macro/kline、/api/macro/timeline），所以数据逐点相同；插件侧只把它
   // 转成内部 candles/points 形状，渲染仍走同一套 LwcChart / MinuteChart。
   // 之所以要这层代理：浏览器端在 DSH 的源上（3080），跨到 8888 会被 CORS 拦。
+  // 🧠 判断（只读代理）：客户端只读不做写入口 —— 与「理由」同一约定，
+  // 写入口只在桌面面板 / 手机页，插件里看到的就是最新的。
+  // body: { code?: "600547"|"XAU" }  → 该标的相关的判断（缺 code 则全部）
+  register("/dsh-stock-watch/views", async (req, res) => {
+    const q = queryOf(req);
+    const code = stripApiCode(q.get("code") || "");
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), DB_API_TIMEOUT);
+    try {
+      const url = `${dbApiBase()}/api/views` + (code ? `?code=${encodeURIComponent(code)}` : "");
+      const r = await fetch(url, { signal: ctrl.signal });
+      const json = await r.json().catch(() => ({}));
+      if (!r.ok || json.ok !== true) {
+        sendJson(res, 502, { ok: false, error: (json && json.error) || `本地 API 返回 ${r.status}` });
+        return;
+      }
+      sendJson(res, 200, { ok: true, views: json.views || [], stats: json.stats || {},
+                           code, updatedAt: Date.now() });
+    } catch {
+      sendJson(res, 502, { ok: false, error: `本地 API 不可用（${dbApiBase()}）` });
+    } finally {
+      clearTimeout(timer);
+    }
+  });
+
   register("/dsh-stock-watch/macro/kline", async (req, res) => {
     const q = queryOf(req);
     const symbol = q.get("symbol") ?? "";

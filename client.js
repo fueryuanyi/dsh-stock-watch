@@ -73,6 +73,14 @@ window.__ModuleLoader__.load({
 .sk-del-armed{width:auto;padding:0 6px;color:#ff5555;background:var(--sk-hover);
                border:1px solid #ff5555}
 /* 出错卡片：宁可占一小块地方说清楚，也不要整块消失 */
+/* 🧠 判断（只读，与 .sk-why 同一视觉语言） */
+.sk-views{margin-top:4px;padding-top:4px;border-top:1px dashed var(--sk-border);font-size:10.5px}
+.sk-view-line{display:flex;gap:5px;align-items:baseline;padding:1px 0}
+.sk-view-d{flex:none;color:var(--sk-muted);font-variant-numeric:tabular-nums}
+.sk-view-st{flex:none;color:var(--sk-muted)}
+.sk-view-st.open{color:var(--sk-cyan)}
+.sk-view-t{flex:1;color:var(--sk-text);opacity:.85;word-break:break-word}
+.sk-view-more{color:var(--sk-muted);font-size:9.5px;padding-top:1px}
 .sk-crash{padding:14px;display:flex;flex-direction:column;gap:6px;align-items:flex-start;
           border:1px solid #ff5555}
 .sk-crash-title{font-size:12px;font-weight:700;color:#ff5555}
@@ -346,6 +354,18 @@ window.__ModuleLoader__.load({
     };
 
     // 理由条目日志（\n 分隔）→ 条目数组；空行丢弃。
+    // ── 🧠 判断（只读）─────────────────────────────────────────────
+    // 与「理由」块并排、同样只读：写入口在桌面面板与手机页 /m（插件是浮层，不适合打字）。
+    // 这条取数**不进 10 秒轮询**：判断是天的粒度，进轮询只会白打请求（实测每轮多 1 发）。
+    function viewsOf(code, cacheRef) {
+      if (!code) return;
+      if (cacheRef.current[code] !== undefined) return;   // 已经有（或正在拉）
+      cacheRef.current[code] = [];
+      api("/views", { code: stripApiCode(code) }).then((d) => {
+        setViews((old) => ({ ...old, [code]: (d && d.views) || [] }));
+      }).catch(() => { setViews((old) => ({ ...old, [code]: [] })); });
+    }
+
     function reasonLines(text) {
       return String(text == null ? "" : text).split("\n")
         .map((s) => s.trim()).filter((s) => s);
@@ -968,6 +988,9 @@ window.__ModuleLoader__.load({
       const [view, setView] = useState(null);
       // 待确认删除的行（✕ 需要点两下）——「点一下就不见了」这种事不该由一次误触完成
       const [delArmed, setDelArmed] = useState(null);
+      // 🧠 判断：{code: [...]}。只读、按标的取一次
+      const [views, setViews] = useState({});
+      const viewsCacheRef = useRef({});
       const [period, setPeriod] = useState("minute");
       const [theme, setTheme] = useState("dark");
       const [groupsCfg, setGroupsCfg] = useState(null);
@@ -2335,6 +2358,23 @@ window.__ModuleLoader__.load({
             title: "买入/卖出理由（按日期累积）· 与 stock-panel 面板、手机页 /m 同一份数据",
           }, lines);
         })();
+        // 🧠 判断块：最多 3 行 + 「还有 N 条」（与理由块并排、同样只读）
+        const viewList = (views[view.code] || []).filter((v) => v.status === "open"
+          || (v.codes || []).indexOf(stripApiCode(view.code)) >= 0);
+        const viewBlock = viewList.length === 0 ? null
+          : react.createElement("div", { className: "sk-views",
+              title: "关于该标的的判断（只读）· 写入口在桌面面板与手机页 /m" },
+              viewList.slice(0, 3).map((v) => react.createElement("div",
+                { className: "sk-view-line", key: v.id },
+                react.createElement("span", { className: "sk-view-d" }, v.date),
+                react.createElement("span", { className: "sk-view-st" + (v.status === "open" ? " open" : "") },
+                  v.status === "open" ? "●" : (v.status === "hit" ? "✅" : (v.status === "miss" ? "❌" : "⚪"))),
+                react.createElement("span", { className: "sk-view-t" }, v.title))),
+              viewList.length > 3
+                ? react.createElement("div", { className: "sk-view-more" }, "还有 " + (viewList.length - 3) + " 条")
+                : null);
+        viewsOf(view.code, viewsCacheRef);
+
         return react.createElement("div", { className: "sk-panel sk-theme-" + theme, style: panelStyle },
           react.createElement("div", { className: "sk-detail-header", onMouseDown: (e) => startDrag(e, "panel"), title: "按住此处可拖动面板" },
             react.createElement("div", { className: "sk-detail-top" },
@@ -2351,6 +2391,7 @@ window.__ModuleLoader__.load({
               trig ? react.createElement("span", { className: "sk-detail-trigger", style: { color: trig.c, borderColor: trig.c } }, trig.t) : null),
             react.createElement("div", { className: "sk-detail-targets" }, targetChip("buy"), targetChip("sell")),
             whyBlock,
+          viewBlock,
             flashMsg ? react.createElement("div", { className: "sk-flash", style: { color: flashMsg.color } }, flashMsg.text) : null,
             // 周期切换：宏观与股票一样给四档 —— /m 的宏观图同样是 分时/日K/周K/月K
             react.createElement("div", { className: "sk-periods" },

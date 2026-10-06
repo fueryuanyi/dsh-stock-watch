@@ -150,6 +150,11 @@ const FAN_PROMPTS = {
 // 2026-08-25: web.ifzq.gtimg.cn 的 /appstock/app/minute/query 被腾讯 WAF 拦截（HTTP 501→waf.tencent.com/501page.html），
 // 同路径换 ifzq.gtimg.cn（无 web. 前缀）实测正常；K 线接口 web.ifzq 仍可用，保持不动。
 const MINUTE_API = "https://ifzq.gtimg.cn/appstock/app/minute/query?code={code}&r=0.1";
+// 批量快照：腾讯同一个 `q=` 接口能一次吞几十个代码（实测 60 个 0.2s 内回）。
+// 2026-10-06 之前是**一个标的一次请求**（111 只 ≈ 111 发/轮）—— 那正是当初必须加
+// 上游熔断的原因；现在整批只要 1~2 发，熔断基本不会再触发。
+const QUOTE_BATCH_API = "https://qt.gtimg.cn/q={codes}";
+const QUOTE_BATCH_SIZE = 60;
 const KLINE_API = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={code},{period},,,{count},qfq";
 
 const DEFAULT_GROUPS = [
@@ -762,6 +767,78 @@ function parseMinuteJson(code, json, includeMinutes) {
   return { quote: null, prices };
 }
 
+/**
+ * 腾讯 `q=` 是 **GBK 文本**（不是 JSON），所以这里不能用 fetchJson —— 要拿二进制再转码。
+ * 熔断闸门与别的上游共用（按 host 记账：这两个接口在不同域名上）。
+ */
+async function fetchTextTencent(url) {
+  if (upstreamBlocked(url)) throw new Error(`upstream circuit open: ${upstreamHostOf(url)}`);
+  try {
+    const res = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const buf = await res.arrayBuffer();
+    const text = new TextDecoder("gbk").decode(buf);
+    upstreamOk(url);
+    return text;
+  } catch (e) {
+    upstreamFail(url);
+    throw e;
+  }
+}
+
+/**
+ * 解析 `v_sh600737="1~中粮糖业~600737~14.66~13.80~...";` 形式的批量快照（**纯函数**，可离线测）。
+ *
+ * 字段位与 `parseMinuteJson` 里那个 `qt` 数组**完全相同**（腾讯两处是同一份数组），
+ * 所以两边算出来的价格天然一致 —— 这也是敢把快照从单只挪到批量的依据。
+ * 键用**无市场前缀**的 6 位代码（返回里就没有前缀）。
+ */
+function parseTencentBatch(text) {
+  const out = new Map();
+  for (const seg of String(text || "").split(";")) {
+    const m = /v_([a-z]{2}\d{6})="([^"]*)"/.exec(seg.trim());
+    if (!m) continue;
+    const parts = m[2].split("~");
+    if (parts.length < 35) continue;                  // 停牌/未上市时常是残缺数组
+    const num = (i) => {
+      const v = parseFloat(parts[i]);
+      return Number.isNaN(v) ? 0 : v;
+    };
+    out.set(m[1].replace(/^(sh|sz|bj)/, ""), {
+      code: m[1],
+      name: String(parts[1] ?? ""),
+      price: num(3),
+      changeAmount: num(31),
+      changePercent: num(32),
+      high: num(33),
+      low: num(34),
+      volume: parseInt(parts[6] ?? "0", 10) || 0,
+      amount: parseFloat(parts[37] ?? "0") * 10000 || 0,
+    });
+  }
+  return out;
+}
+
+/**
+ * 整批取快照 → Map(无前缀 code → quote)。
+ * 分批是必须的：URL 有长度上限，且一次几百个代码对上游也不礼貌。
+ * 某一批失败只丢那一批（对应行显示 `--`，行本身仍在）—— 不要因为一批失败让整屏空白。
+ */
+async function fetchBatchQuotes(symbols) {
+  const out = new Map();
+  const codes = symbols.map((s) => normalizeApiCode(s.code));
+  for (let i = 0; i < codes.length; i += QUOTE_BATCH_SIZE) {
+    const chunk = codes.slice(i, i + QUOTE_BATCH_SIZE);
+    try {
+      const text = await fetchTextTencent(QUOTE_BATCH_API.replace("{codes}", chunk.join(",")));
+      for (const [bare, q] of parseTencentBatch(text)) out.set(bare, q);
+    } catch (e) {
+      console.error(`[dsh-stock-watch] 批量快照失败（${chunk.length} 只）：${e.message}`);
+    }
+  }
+  return out;
+}
+
 async function fetchQuoteResult(symbol, includeMinutes) {
   try {
     const json = await fetchJsonTencent(MINUTE_API.replace("{code}", normalizeApiCode(symbol.code)));
@@ -1171,8 +1248,20 @@ function apply(ctx) {
       const stockSymbols = allSymbols.filter((s) => !isMacroCode(s.code));
       const macroQuotes = macroSymbols.length > 0 ? await fetchMacroQuotes() : null;
 
+      // 快照走**整批**（1~2 发覆盖全部标的），分钟线只给当前分组按需单发 ——
+      // 2026-10-06 改：此前每个标的都发一次 minute 请求（111 只 ≈ 111 发/轮），
+      // 那既慢（~8s）又是熔断频发的根源。快照与分钟来自同一个 `qt` 数组，
+      // 字段位一致，所以价格不会因为换了取数方式而变化。
+      const batchQuotes = stockSymbols.length > 0 ? await fetchBatchQuotes(stockSymbols) : new Map();
       const allResults = await Promise.all(
-        stockSymbols.map((s) => fetchQuoteResult(s, includeMinutes && curCodes.has(s.code)))
+        stockSymbols.map(async (s) => {
+          const bare = String(s.code).replace(/^(sh|sz|bj)/, "");
+          const snap = batchQuotes.get(bare) || null;
+          if (!(includeMinutes && curCodes.has(s.code))) return { quote: snap, prices: [] };
+          const one = await fetchQuoteResult(s, true);
+          // 分钟接口顺带回一份快照：它更"此刻"，有就用它；没有再退回整批那份
+          return { quote: one.quote || snap, prices: one.prices };
+        })
       );
       const byCode = new Map();
       stockSymbols.forEach((s, i) => {
